@@ -341,15 +341,15 @@ private fun DesignTab(update:()->Unit) {
         }
     }
     Group("Camera alignment","Designed for the inner display only. Samsung may restrict overlays in the status bar, so verify this on your phone.") {
-        OptionToggle("Align to camera automatically","Use Android's detected display cutout when available",PulseSettings.cameraAnchor,{PulseSettings.setCameraAnchor(it);update()})
+        OptionToggle("Align to camera automatically","Use Android's detected display cutout when available",PulseSettings.cameraAnchor,{PulseSettings.updateCameraAnchor(it);update()})
         Text("Camera vertical adjustment · ${PulseSettings.cameraYOffset} dp",fontWeight=FontWeight.Medium)
-        Slider(value=PulseSettings.cameraYOffset.toFloat(),onValueChange={PulseSettings.setCameraYOffset(it.toInt());update()},valueRange=-45f..160f)
+        Slider(value=PulseSettings.cameraYOffset.toFloat(),onValueChange={PulseSettings.updateCameraYOffset(it.toInt());update()},valueRange=-45f..160f)
         Row(verticalAlignment=Alignment.CenterVertically) {
             Text("Camera cover · ${if(PulseSettings.cameraDotSize==0) "Automatic" else "${PulseSettings.cameraDotSize} dp"}",Modifier.weight(1f),fontWeight=FontWeight.Medium)
-            DarkButton("Auto", onClick={ PulseSettings.setCameraDotSize(0);update() })
+            DarkButton("Auto", onClick={ PulseSettings.updateCameraDotSize(0);update() })
         }
         Slider(value=(PulseSettings.cameraDotSize.takeIf{it>0} ?: 19).toFloat(),
-            onValueChange={PulseSettings.setCameraDotSize(it.toInt());update()},valueRange=8f..42f)
+            onValueChange={PulseSettings.updateCameraDotSize(it.toInt());update()},valueRange=8f..42f)
         Note("Camera cover diameter is detected automatically where possible. If the black circle looks too large or small, adjust it here.")
         Note("Drag vertically directly on the pill for free positioning. Long-press, then drag to move in either direction. Dragging switches from camera alignment to manual placement.")
         Text("Manual position: X ${PulseSettings.posX} dp  ·  Y ${PulseSettings.posY} dp",fontSize=12.sp,color=Muted)

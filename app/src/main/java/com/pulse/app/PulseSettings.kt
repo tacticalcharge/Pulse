@@ -70,9 +70,9 @@ object PulseSettings {
         posX=x; posY=y; save("posX",x); save("posY",y)
         cameraAnchor=false; save("cameraAnchor",false)
     }
-    fun setCameraAnchor(v: Boolean) { cameraAnchor=v; save("cameraAnchor",v) }
-    fun setCameraYOffset(v: Int) { cameraYOffset=v.coerceIn(-45,160); save("cameraYOffset",cameraYOffset) }
-    fun setCameraDotSize(v: Int) {cameraDotSize=if(v==0) 0 else v.coerceIn(8,42);save("cameraDotSize",cameraDotSize)}
+    fun updateCameraAnchor(v: Boolean) { cameraAnchor=v; save("cameraAnchor",v) }
+    fun updateCameraYOffset(v: Int) { cameraYOffset=v.coerceIn(-45,160); save("cameraYOffset",cameraYOffset) }
+    fun updateCameraDotSize(v: Int) {cameraDotSize=if(v==0) 0 else v.coerceIn(8,42);save("cameraDotSize",cameraDotSize)}
     fun setAnimations(v: Boolean) { animationsOn=v; save("animationsOn",v) }
     fun resetCameraPosition() {
         posX=0; posY=0; cameraYOffset=0; cameraDotSize=0; cameraAnchor=true
