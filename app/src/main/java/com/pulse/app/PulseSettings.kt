@@ -44,13 +44,13 @@ object PulseSettings {
     private fun save(key: String, value: String) = prefs.edit().putString(key, value).apply()
     fun setOverlay(v: Boolean) { overlayOn = v; save("overlayOn",v) }
     fun setF1(v: Boolean) { f1On = v; save("f1On",v); if (!v && focus == "F1") setFocus("Media") }
-    fun setAutoF1(v: Boolean) { autoF1 = v; save("autoF1",v) }
+    fun updateAutoF1(v: Boolean) { autoF1 = v; save("autoF1",v) }
     fun setMedia(v: Boolean) { mediaOn = v; save("mediaOn",v) }
     fun setNotifications(v: Boolean) { notificationsOn = v; save("notificationsOn",v) }
     fun setAi(v: Boolean) { aiOn = v; save("aiOn",v) }
     fun setWidth(v: Int) { pillWidth = v; save("pillWidth",v) }
-    fun setAccent(v: Int) { accent = v; save("accent",v) }
-    fun setFocus(v: String) { focus = v; save("focus",v) }
+    fun updateAccent(v: Int) { accent = v; save("accent",v) }
+    fun updateFocus(v: String) { focus = v; save("focus",v) }
     fun setDriver(v: Int) { selectedDriver = v; save("selectedDriver",v) }
     fun setModel(v: String) { openAiModel = v; save("model",v) }
     fun setPosition(x: Int, y: Int) { posX = x; posY = y; save("posX",x); save("posY",y) }
