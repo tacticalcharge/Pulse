@@ -16,10 +16,13 @@ import java.util.concurrent.Executors
 /** OpenF1 HTTP client plus a small timestamp-based playback engine. */
 data class F1Session(
     val key: Int, val year: Int, val country: String, val name: String,
-    val start: Instant, val end: Instant
+    val start: Instant, val end: Instant, val circuit: String = "", val meetingKey: Int = 0
 ) {
     val label: String get() = "$year · $country · $name"
 }
+data class TrackPoint(val x: Float, val y: Float)
+data class F1Weather(val at: Instant, val air: Double, val track: Double, val raining: Boolean)
+
 data class F1Event(
     val at: Instant, val driver: Int? = null, val position: Int? = null,
     val lap: Int? = null, val message: String? = null
@@ -30,6 +33,11 @@ object F1Store {
     private val main = Handler(Looper.getMainLooper())
     val sessions = mutableStateListOf<F1Session>()
     val events = mutableStateListOf<F1Event>()
+    /** One sampled lap: a real coordinate trace, not a licensed circuit graphic. */
+    val track = mutableStateListOf<TrackPoint>()
+    val weather = mutableStateListOf<F1Weather>()
+    var trackStatus by mutableStateOf("Choose a replay to load its track trace."); private set
+    private var requestGeneration = 0
     var selectedSession by mutableStateOf<F1Session?>(null); private set
     var status by mutableStateOf("Choose a season to load sessions."); private set
     var mode by mutableStateOf("IDLE"); private set
@@ -42,12 +50,16 @@ object F1Store {
     private var loading = false
     private var lastLivePoll = Instant.EPOCH
     private var lastLiveEventAt = Instant.EPOCH
+    private var lastLiveFetchAttempt = Instant.EPOCH
+    private var lastMapAttempt = Instant.EPOCH
+    private var fetchingLive = false
 
     private fun timestamp(raw: String): Instant = OffsetDateTime.parse(raw).toInstant()
     private fun sessionFrom(json: JSONObject): F1Session? = runCatching {
         F1Session(json.getInt("session_key"),json.optInt("year"),
             json.optString("country_name", "Grand Prix"),json.optString("session_name","Session"),
-            timestamp(json.getString("date_start")), timestamp(json.getString("date_end")))
+            timestamp(json.getString("date_start")), timestamp(json.getString("date_end")),
+            json.optString("circuit_short_name", ""),json.optInt("meeting_key"))
     }.getOrNull()
     private fun parseSessions(raw: JSONArray): List<F1Session> {
         val list = mutableListOf<F1Session>()
@@ -84,8 +96,91 @@ object F1Store {
                 }
             }
         }
+        // Optional pit stop events help make the replay timeline richer.
+        runCatching {
+            val pits=HttpUtil.getArray("https://api.openf1.org/v1/pit?session_key=$sessionKey$encoded")
+            for(i in 0 until pits.length()) {
+                val obj=pits.optJSONObject(i) ?: continue
+                runCatching {
+                    val driver=obj.optInt("driver_number",0)
+                    val lap=obj.optInt("lap_number",0)
+                    output.add(F1Event(timestamp(obj.getString("date")),driver=driver.takeIf{it>0},
+                        lap=lap.takeIf{it>0},message="Pit lane · car #$driver · lap $lap"))
+                }
+            }
+        }
         return output.sortedBy { it.at }
     }
+    /** Download at most one real lap worth of (x,y) location points to outline the circuit.
+     * OpenF1 positions are approximate. The moving dot is estimated from lap progress,
+     * not an exact live GPS point. Never present the dot as precise live telemetry.
+     */
+    private fun fetchTrackTrace(sessionKey: Int, driver: Int): List<TrackPoint> {
+        val laps = HttpUtil.getArray("https://api.openf1.org/v1/laps?session_key=$sessionKey&driver_number=$driver")
+        var chosenStart: Instant? = null
+        var duration = 100.0
+        for (i in 0 until laps.length()) {
+            val lap = laps.optJSONObject(i) ?: continue
+            val secs = lap.optDouble("lap_duration",0.0)
+            val date = lap.optString("date_start")
+            if (secs in 45.0..180.0 && date.isNotBlank() && date != "null") {
+                val parsed = runCatching { timestamp(date) }.getOrNull()
+                if (parsed != null) { chosenStart=parsed; duration=secs; break }
+            }
+        }
+        val start = chosenStart ?: return emptyList()
+        val end = start.plusMillis((duration*1000).toLong())
+        val raw = HttpUtil.getArray("https://api.openf1.org/v1/location?session_key=$sessionKey&driver_number=$driver&date>=${start}&date<=${end}")
+        val data = mutableListOf<TrackPoint>()
+        for (i in 0 until raw.length()) {
+            val obj = raw.optJSONObject(i) ?: continue
+            if (obj.has("x") && obj.has("y")) data.add(TrackPoint(obj.optDouble("x").toFloat(),obj.optDouble("y").toFloat()))
+        }
+        if (data.size < 15) return emptyList()
+        return data.filterIndexed { index, _ -> index % 2 == 0 }.take(500)
+    }
+
+    private fun fetchWeather(sessionKey: Int): List<F1Weather> {
+        val raw=HttpUtil.getArray("https://api.openf1.org/v1/weather?session_key=$sessionKey")
+        val output=mutableListOf<F1Weather>()
+        for(i in 0 until raw.length()) {
+            val obj=raw.optJSONObject(i) ?: continue
+            runCatching {output.add(F1Weather(timestamp(obj.getString("date")),
+                obj.optDouble("air_temperature",0.0),obj.optDouble("track_temperature",0.0),
+                obj.optInt("rainfall",0)>0))}
+        }
+        return output.sortedBy {it.at}
+    }
+    fun currentWeather(): String {
+        val event=weather.lastOrNull {it.at.toEpochMilli() <= cursorMs} ?: return "Weather unavailable"
+        return "Air %.1f°C · Track %.1f°C · %s".format(event.air,event.track,if(event.raining) "Rain" else "Dry")
+    }
+
+    fun stopPlayback() {
+        requestGeneration++
+        mode="IDLE"; playing=false; loading=false; selectedSession=null; events.clear(); track.clear(); weather.clear()
+        cursorMs=0; trackStatus="Choose a replay to load its track trace."
+        status="F1 playback stopped. Pulse will return to the camera when idle."
+        if (PulseSettings.focus == "F1") PulseSettings.updateFocus("Media")
+        PulseOverlayService.instance?.refreshUi()
+    }
+    fun positionTable(): List<Pair<Int,Int>> {
+        if (events.isEmpty()) return emptyList()
+        val at = cursorMs
+        val map=mutableMapOf<Int,Int>()
+        events.forEach { e -> if (e.at.toEpochMilli() <= at && e.driver != null && e.position != null) map[e.driver] = e.position }
+        return map.entries.sortedBy { it.value }.map { it.value to it.key }
+    }
+    /** Approximate fraction of selected driver's current lap, from lap-start records. */
+    fun lapProgress(): Float {
+        if (events.isEmpty()) return 0f
+        val laps = events.filter { it.driver==PulseSettings.selectedDriver && it.lap!=null && it.message==null }
+        val previous = laps.lastOrNull { it.at.toEpochMilli()<=cursorMs } ?: return 0f
+        val next = laps.firstOrNull { it.at.isAfter(previous.at) } ?: return 0f
+        val duration = next.at.toEpochMilli()-previous.at.toEpochMilli()
+        return ((cursorMs-previous.at.toEpochMilli()).toFloat()/duration.coerceAtLeast(1L)).coerceIn(0f,1f)
+    }
+
     fun listYear(year: Int) {
         selectedYear = year
         status = "Loading $year sessions…"
@@ -101,20 +196,57 @@ object F1Store {
     }
     fun loadReplay(session: F1Session) {
         if (loading) return
-        loading = true
-        selectedSession = session
-        mode = "REPLAY"; playing = false; status = "Loading historical positions and race control…"
+        if (!PulseSettings.f1On) {status="Enable F1 before starting a replay.";return}
+        val generation=++requestGeneration
+        loading=true
+        selectedSession=session; track.clear(); weather.clear(); trackStatus="Loading track outline…"
+        mode="REPLAY"; playing=false; status="Loading historical positions and race control…"
         io.execute {
-            val result = runCatching { fetchEvents(session.key) }
+            val result=runCatching { fetchEvents(session.key) }
             main.post {
-                loading = false
+                if (generation != requestGeneration) return@post
+                loading=false
                 result.onSuccess {
                     events.clear(); events.addAll(it)
-                    cursorMs = (it.firstOrNull()?.at ?: session.start).toEpochMilli()
-                    playing = it.isNotEmpty()
-                    status = if (it.isEmpty()) "No historical events returned for this session." else "Replay loaded: ${it.size} events."
+                    cursorMs=(it.firstOrNull()?.at ?: session.start).toEpochMilli()
+                    playing=it.isNotEmpty()
+                    status=if (it.isEmpty()) "No historical events for this session." else "Replay loaded: ${it.size} events."
+                    if(it.isEmpty()) {mode="IDLE";selectedSession=null}
+                    else PulseSettings.updateFocus("F1")
                     PulseOverlayService.instance?.refreshUi()
-                }.onFailure { status = "Replay failed: ${it.message}"; playing = false }
+                }.onFailure {
+                    status="Replay failed: ${it.message}"; playing=false;mode="IDLE";selectedSession=null
+                }
+            }
+            val map=runCatching { fetchTrackTrace(session.key,PulseSettings.selectedDriver) }
+            main.post {
+                if (generation != requestGeneration) return@post
+                map.onSuccess {
+                    track.clear(); track.addAll(it)
+                    trackStatus=if (it.isEmpty()) "No usable location trace for this driver/session." else "Approximate circuit outline from one recorded lap."
+                    PulseOverlayService.instance?.refreshUi()
+                }.onFailure { trackStatus="Track trace unavailable: ${it.message}" }
+            }
+            val sky=runCatching {fetchWeather(session.key)}
+            main.post {
+                if(generation != requestGeneration) return@post
+                sky.onSuccess {weather.clear();weather.addAll(it)}
+            }
+        }
+    }
+    fun reloadTrackForDriver() {
+        val session=selectedSession ?: return
+        val generation=requestGeneration
+        track.clear(); trackStatus="Loading selected driver's circuit trace…"
+        io.execute {
+            val response=runCatching { fetchTrackTrace(session.key,PulseSettings.selectedDriver) }
+            main.post {
+                if (generation != requestGeneration || selectedSession?.key!=session.key) return@post
+                response.onSuccess {
+                    track.clear(); track.addAll(it)
+                    trackStatus=if(it.isEmpty()) "No track trace for this driver." else "Approximate circuit outline from one recorded lap."
+                }.onFailure {trackStatus="Track trace unavailable: ${it.message}"}
+                PulseOverlayService.instance?.refreshUi()
             }
         }
     }
@@ -132,10 +264,14 @@ object F1Store {
             main.post {
                 result.onSuccess { active ->
                     liveSession = active
+                    if (active == null && mode == "LIVE" && selectedSession?.end?.let {
+                        Duration.between(it,Instant.now()).toMinutes()>10
+                    } == true) stopPlayback()
                     if (active != null) {
                         if (lastAutoFocused != active.key) {
                             lastAutoFocused = active.key
-                            selectedSession = active; mode = "LIVE"; events.clear()
+                            selectedSession = active; mode = "LIVE"; events.clear(); track.clear(); weather.clear()
+                            lastLiveEventAt=Instant.EPOCH; lastLiveRecord=null; lastLiveFetchAttempt=Instant.EPOCH
                             cursorMs = now.toEpochMilli(); playing = true
                             PulseSettings.updateFocus("F1")
                             PulseOverlayService.instance?.refreshUi()
@@ -148,18 +284,40 @@ object F1Store {
     }
     fun watchLiveNow() {
         val active = liveSession ?: run { status = "No current session found in the schedule."; return }
-        selectedSession = active; mode = "LIVE"; playing = true
+        selectedSession = active; mode = "LIVE"; playing = true; track.clear(); weather.clear()
+        lastLiveEventAt=Instant.EPOCH;lastLiveRecord=null;lastLiveFetchAttempt=Instant.EPOCH
         events.clear(); cursorMs = Instant.now().toEpochMilli()
         status = "Following session window; checking live feed…"
         pollLive(active)
         PulseOverlayService.instance?.refreshUi()
     }
+    fun refreshLiveIfNeeded() {
+        val active=liveSession ?: return
+        if(mode=="LIVE") pollLive(active)
+    }
+    private fun loadLiveMapIfNeeded(session: F1Session) {
+        if(track.isNotEmpty() || Duration.between(lastMapAttempt,Instant.now()).seconds < 180) return
+        lastMapAttempt=Instant.now()
+        val key=session.key
+        io.execute {
+            val data=runCatching {fetchTrackTrace(key,PulseSettings.selectedDriver)}
+            main.post {
+                if(mode!="LIVE" || selectedSession?.key!=key) return@post
+                data.onSuccess {
+                    if(it.isNotEmpty()) {track.clear();track.addAll(it);trackStatus="Approximate circuit trace from a recorded lap."}
+                }
+            }
+        }
+    }
     private fun pollLive(session: F1Session) {
-        if (!PulseSettings.f1On || mode != "LIVE" || selectedSession?.key != session.key) return
+        if (!PulseSettings.f1On || mode != "LIVE" || selectedSession?.key != session.key || fetchingLive) return
+        if(Duration.between(lastLiveFetchAttempt,Instant.now()).seconds < 15) return
+        lastLiveFetchAttempt=Instant.now();fetchingLive=true
         val since = if (lastLiveEventAt == Instant.EPOCH) Instant.now().minusSeconds(600) else lastLiveEventAt.minusSeconds(2)
         io.execute {
             val result = runCatching { fetchEvents(session.key, since) }
             main.post {
+                fetchingLive=false
                 result.onSuccess { incoming ->
                     val latestKnown = events.map { "${it.at}:${it.driver}:${it.position}:${it.message}" }.toHashSet()
                     val appended = incoming.filter { latestKnown.add("${it.at}:${it.driver}:${it.position}:${it.message}") }
@@ -170,11 +328,15 @@ object F1Store {
                         lastLiveEventAt = events.last().at
                         lastLiveRecord = lastLiveEventAt
                         if (playing && wasNearLive) cursorMs = lastLiveEventAt.toEpochMilli()
+                        loadLiveMapIfNeeded(session)
                     }
                     val fresh = lastLiveRecord?.let { Duration.between(it,Instant.now()).seconds in 0..90 } == true
                     status = if (fresh) "Live feed connected" else "Session window active; data delayed or unavailable"
                     PulseOverlayService.instance?.refreshUi()
                 }.onFailure {
+                    if(it.message?.contains("401")==true || it.message?.contains("403")==true) {
+                        lastLiveFetchAttempt=Instant.now().plusSeconds(90)
+                    }
                     status = "Live data unavailable: ${it.message}. OpenF1 live access may require a subscription."
                     PulseOverlayService.instance?.refreshUi()
                 }
@@ -189,7 +351,10 @@ object F1Store {
             if (mode == "REPLAY" && cursorMs >= last) playing = false
         }
     }
-    fun togglePlay() { playing = !playing; PulseOverlayService.instance?.refreshUi() }
+    fun togglePlay() {
+        if (events.isEmpty() || mode == "IDLE") return
+        playing = !playing; PulseOverlayService.instance?.refreshUi()
+    }
     fun seekSeconds(seconds: Long) {
         if (events.isEmpty()) return
         cursorMs = (cursorMs + seconds * 1000L).coerceIn(events.first().at.toEpochMilli(),events.last().at.toEpochMilli())

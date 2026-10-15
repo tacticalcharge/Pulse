@@ -1,114 +1,78 @@
-# Pulse — Build and install with GitHub (Windows + Galaxy Z Flip5)
+# Pulse v0.2 — GitHub build and installation guide (Windows → Galaxy Z Flip5)
 
-You do **not** need to download Android Studio or the Android SDK onto your PC.
-GitHub Actions will install Java, Gradle and the Android SDK on a temporary GitHub computer to compile the project.
-You need a GitHub account, a browser, an internet connection, your phone and the provided source ZIP.
+You **do not need Android Studio or a local Android SDK**. GitHub Actions downloads the Android SDK, Java and Gradle on a hosted runner to compile Pulse. Your phone downloads only the finished APK.
 
-## Part A — Create the private repository
+## 1. Update your existing Pulse GitHub repository
 
-1. Go to https://github.com and sign in (or create an account).
-2. Open https://github.com/new to create a repository.
-3. Repository name: `Pulse`. Choose **Private**.
-4. Do **not** check **Add a README**, `.gitignore`, or license; this ZIP already contains its own.
-5. Click **Create repository**.
-6. On your Windows PC, unzip `Pulse-GitHub.zip`.
-7. Open the extracted `Pulse-GitHub` folder. You should see `app`, `gradle`, `.github`, `README.md`, `settings.gradle.kts` and other project files.
-8. In the empty repository page, click **uploading an existing file** (or **Add file > Upload files**).
-9. Drag **the CONTENTS of the `Pulse-GitHub` folder**, including the `.github` folder, onto GitHub's upload area. Do not upload the ZIP file itself and do not upload a single nested `Pulse-GitHub` directory.
-10. Scroll to the bottom and click **Commit changes**. Choose the `main` branch.
+Because you previously had issues with old Kotlin files remaining on `main`, the safest workflow is to replace the **whole source tree**, including the new `TrackMapView.kt` file.
 
-**Check your folder layout on GitHub.** At the repository root you need both `app/build.gradle.kts` and `.github/workflows/build-apk.yml`.
-If you see `Pulse-GitHub/app/build.gradle.kts`, everything is nested one folder too deep and the workflow may not work.
+### Recommended: GitHub Desktop (GUI, no Android SDK)
 
-If the browser refuses a folder, try Chrome/Edge with drag-and-drop. Alternatively upload the files in batches, preserving folder paths. The `.github` folder starts with a dot; make sure it is included.
+1. Download and install [GitHub Desktop](https://desktop.github.com/) (much smaller than Android Studio).
+2. Sign in and choose **File > Clone repository**. Choose your existing `tacticalcharge/Pulse` repository and clone it to a local folder.
+3. Download and extract `Pulse-v0.2-GitHub.zip`.
+4. Open the extracted project folder. Copy its **contents** into the cloned Pulse repository folder, **replacing existing files**. This means `app`, `.github`, the Gradle configuration files, and documentation. Do **not** delete the cloned folder's hidden `.git` directory.
+5. GitHub Desktop should now show modified files and the added `TrackMapView.kt`.
+6. Enter a commit message, for example `Pulse v0.2 camera UI and F1 improvements`, click **Commit to main**, then **Push origin**.
+7. On GitHub, verify `app/src/main/java/com/pulse/app/TrackMapView.kt` exists and `PulseSettings.kt` contains `updateAutoF1` (not the old `setAutoF1` function).
 
-## Part B — Run the cloud build
+### Browser-only alternative
 
-1. On GitHub open your new **Pulse** repository.
-2. Select the **Actions** tab.
-3. If GitHub asks to enable Actions for this repository, enable them.
-4. Select **Build Pulse APK** in the workflows list.
-5. You can use the run triggered automatically by your first upload, or click **Run workflow**, choose `main`, then **Run workflow**.
-6. Open the newest workflow run, then open the **Android debug APK** job to see the steps.
-7. If everything passes (green check), return to that run's summary and find **Artifacts**.
-8. Click **Pulse-debug-apk** to download an artifact ZIP. Extract it to get `app-debug.apk`.
+Use **Add file > Upload files** in your GitHub repository. Drag the **contents** of the extracted project folder into the upload area, preserving directory paths and including `.github` (the hidden folder). Commit to `main`. If GitHub's browser upload does not reliably overwrite existing files, use GitHub Desktop above; partial uploads caused past builds to compile old code.
 
-If the build is red, you **do not have a compiled app yet**. Open the failed job step, copy the first meaningful error and share it for troubleshooting. The original Pulse source has not been fully compiled or tested, so this first build may need fixes.
+**Do not upload the ZIP file itself** to the repository. GitHub Actions expects the unzipped source tree.
 
-### What if no Actions build appears?
+## 2. Compile the APK on GitHub
 
-- Check that `.github/workflows/build-apk.yml` exists **exactly** at the root under `.github/workflows/`.
-- Check that the repository's default branch is `main`.
-- Reopen **Actions**; on private accounts or some policies, the Actions feature may need to be enabled.
-- If the build says `Gradle` cannot resolve a dependency, share the actual error; don't randomly change version numbers.
+1. Open [your Pulse repository's Actions page](https://github.com/tacticalcharge/Pulse/actions).
+2. Open the newest **Build Pulse APK** run (or manually select the workflow and **Run workflow** on `main`).
+3. Open the **Android debug APK** job.
+4. Check the **Build installable debug APK** step. A green check indicates the source compiled and packaged successfully. A red X means **no finished APK was produced**.
+5. If successful, return to the run summary, scroll to **Artifacts**, and download `Pulse-debug-apk`.
+6. Extract the downloaded artifact ZIP. Inside is `app-debug.apk`.
 
-## Part C — Install the debug APK on the Galaxy Z Flip5
+If the run fails, copy the first compiler/error lines including file names and line numbers. Do not copy hundreds of lines of the Gradle stack trace. **This version has not been independently compiled or tested on a physical Z Flip5.** The build result on GitHub is the next verification step.
 
-1. Transfer `app-debug.apk` to the Z Flip5 (download it directly on the phone, use USB file transfer, or another trusted method).
-2. On the phone, open **My Files** or your file manager and tap `app-debug.apk`.
-3. Android may prompt you to allow app installation from that source. Review the warning carefully; if you trust this app you built yourself, enable that permission for **that specific file manager** in Settings, then retry. You can disable it afterward.
-4. Tap **Install**, then **Open**.
-5. In the Pulse app, grant **Display over other apps** permission when prompted, return to Pulse and toggle **Run Pulse pill**.
-6. Optional: grant **Notification access** for notification previews/media controls if you want those features. Review the access implications before allowing it.
-7. Test single-tap to expand, double-tap for AI, swipe sideways for focus, and long-press to reposition.
+## 3. Install on your phone
 
-**You do not need USB debugging for this cloud-build/install method.** Android Studio and a PC SDK are also unnecessary.
+1. Send `app-debug.apk` to the Z Flip5 or download the artifact directly on the phone.
+2. Open the APK from **My Files**. Review Android's installation permission prompt, and only approve installation from the source you trust.
+3. Launch Pulse, then use the Home tab to grant **Display over other apps** and turn on the pill.
+4. For media and notification features, open **System / Features > Notification access** and review the requested access before granting.
+5. For chat, open **System > OpenAI API**, and add your own authorized API key on the phone. Never paste it into GitHub, a build log, or a chat message.
 
-## Part D — F1 and AI configuration
+**Debug-signing caveat:** GitHub may sign separate debug builds with different ephemeral debug keys. If the updated APK reports a signature mismatch, you may have to remove the older Pulse installation before installing this version; **uninstalling can erase local settings and the saved key**. A future improvement is to configure a persistent signing key securely in repository secrets.
 
-### F1 replay
+## 4. Customize camera alignment
 
-1. Open Pulse > **F1**.
-2. Enable F1 and select a supported year in the historical browser.
-3. Pick a session and load its timestamped events.
-4. Use **Play/Pause**, **−15 seconds**, **+15 seconds**, event skipping and **Latest**.
-5. Pulse controls its own data timeline only; it does not control Viaplay video playback.
+- Open **Design > Camera alignment** and keep **Align to camera automatically** on initially.
+- In the idle state, the pill should look like a tiny black dot around the top selfie camera. Tap that area to expand.
+- If One UI places it too high/low, use **Camera vertical adjustment**. If the black dot is too large/small, adjust **Camera cover** diameter or select **Auto**.
+- **Drag vertically on the pill immediately** to move it up/down; **long-press then drag** to reposition freely in either direction. Dragging disables automatic alignment.
+- Press **Reset to selfie camera** to recenter it.
+- **Single tap** expands/collapses; **double tap** opens floating AI; **horizontal swipe** switches available focus; **tap outside** requests collapse.
 
-Public historical OpenF1 API access and coverage vary. Automatic live-session focus is **schedule-based**; live data may not arrive without a separate subscription, so the app must not be relied on for real-time positions until verified.
+**Android limitation:** On some Z Flip5 firmware versions, application overlays cannot occupy the actual system status-bar area or accept touches over the camera cutout. If the overlay won't sit directly on the camera, manually position it just below the status bar. No ordinary overlay API can guarantee system-level Dynamic Island behavior.
 
-### OpenAI floating chat
+## 5. F1 replay, map and stop controls
 
-1. Obtain an OpenAI API key through your own authorized OpenAI API account and review the API's separate billing.
-2. In the **installed Pulse app** open **System** and configure the key there, not in source code or GitHub.
-3. Enable AI, then double-tap the pill to try the floating chat.
-4. Do **not** put the API key in a GitHub file, Actions workflow or commit. Personal source projects are not immune to credential leaks.
+1. Open **Racing**, enable F1, and choose a year (2023 onward).
+2. Search for a country/circuit and select a filter: **Race**, **Qualifying**, or **All**.
+3. Expand a circuit card and select a session to load the replay. Historical data loads from OpenF1 and requires a network connection.
+4. Use the playback timeline, **Pause**, **−15s / +15s**, event skipping and **Latest** to sync Pulse's data to Viaplay's video. Pulse does not control Viaplay playback.
+5. The map, when available, uses sampled location coordinates from a single recorded lap. It shows a circuit path and an **estimated progress dot**, not precise live car positions. Driver numbers without location data may show an unavailable-map message. You can change the selected driver in the Playback card.
+6. Weather, reconstructed positions, pit-event and race-control information appear when OpenF1 provides them for the session.
+7. Select **Stop replay / hide F1 timeline** (or use Stop in the expanded pill) to clear the session and hide F1. If no other activity is active, Pulse returns to a camera-sized idle dot. Switch **Enable F1** off to disable the feature completely.
 
-The prototype currently stores the key encrypted at rest on the phone. For stronger credential isolation, a private backend is the recommended future improvement.
+**Live data:** OpenF1 real-time feed access requires a subscription. Pulse can detect session windows, but only shows active F1 in the pill when fresh live data is actually available. The live GPS-style map is not guaranteed in this personal prototype.
 
-## Part E — Making updates later
+## 6. Troubleshooting
 
-1. Edit project files locally using any text editor (VS Code is optional; Android Studio is not required to edit).
-2. Upload changed files via **Add file > Upload files**, or use Git on Windows.
-3. Each new commit to `main` starts a new build automatically. You can also choose **Run workflow** manually.
-4. Download the new APK artifact, transfer it to the phone and install it as an update.
-5. This debug APK is signed for testing. Because GitHub-hosted runners can create different debug signing keys, **later builds may not install directly over earlier builds**. You may have to uninstall the previous debug build (which can erase local app settings) unless a persistent signing key is configured. For convenient updates later, we should set up a consistent private signing key using GitHub repository secrets; never publish that key.
-
-## Security, costs and limits
-
-- Keep the GitHub repository **private** and never commit secrets.
-- GitHub Actions is subject to account plan, usage and billing limits. Check current GitHub pricing and Actions allowances before repeated builds.
-- The OpenAI API has separate usage billing; monitor spending in your OpenAI account.
-- OpenF1 live timing requires appropriate API access and provider permission.
-- Overlays and background services can behave differently on Samsung devices; device testing is needed.
-- Debug APKs are for personal testing, not a production release.
-
-## Troubleshooting checklist
-
-**Build fails:** open Actions > failed run > failed step, and copy the actual error plus file and line number.
-
-**No artifact:** artifacts are uploaded only if the Android build succeeds.
-
-**APK won't install:** ensure you're installing the actual extracted `.apk`, not the artifact `.zip`. If an existing Pulse build is installed, a debug-signing-key mismatch is possible; consider backing up settings before reinstalling.
-
-**App opens but no pill:** check overlay permission and the Pulse master switch; Samsung battery limits may affect background behavior.
-
-**AI fails:** check internet connection, API key, account permissions, model name and billing. Never paste your secret API key into a chat or issue.
-
-**F1 lacks live positions:** scheduled-session detection does not give free real-time timing; check the provider's access rules and data freshness.
-
-## For troubleshooting or future development
-
-Workflow: `.github/workflows/build-apk.yml`  
-Android configuration: `app/build.gradle.kts`  
-Source: `app/src/main/java/com/pulse/app/`  
-Build output on GitHub: `app/build/outputs/apk/debug/app-debug.apk`
+- **No APK in Artifacts:** check that the run is green. Artifacts upload only after a successful build.
+- **Repeated old Kotlin errors:** check that your newest GitHub commit truly replaces old `.kt` files on `main` and `TrackMapView.kt` exists.
+- **Pill below camera:** Android system-bar overlay restrictions may prevent exact cutout placement; use Design > Camera vertical adjustment or manual drag.
+- **Pill doesn't expand when you tap the camera:** the status bar may intercept touches. Move the pill slightly lower and tap the visible portion.
+- **Tap outside doesn't dismiss:** `ACTION_OUTSIDE` delivery depends on Android/One UI window routing; use the panel's × close button as a fallback.
+- **No F1 map:** the selected driver/session may lack enough usable historical location records or the API may be unavailable. Try a completed race and another driver number.
+- **No live F1:** a session schedule isn't a live-feed license. Live data access is separate.
+- **AI errors:** verify network connectivity, model name, API access and billing. Never share API keys to debug an error.

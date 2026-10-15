@@ -1,16 +1,11 @@
-# Build status — GitHub-ready source (October 15, 2026)
+# Pulse v0.2 build status
 
-The source from the initial Android Studio prototype was repackaged with a cloud build workflow.
-**It has not been compiled or successfully built as an APK in this environment.**
-
-The included GitHub Actions workflow installs on GitHub-hosted Ubuntu:
-- Java 17
-- Android SDK platform 37 and Build Tools 36.0.0
-- Gradle 9.4.1 (compatible minimum for Android Gradle Plugin 9.2)
-
-Then it attempts to build `:app:assembleDebug` and publishes `app-debug.apk` if successful.
-This bypasses the original project's missing Gradle wrapper JAR.
-
-No APK is bundled. Consult `GITHUB_SETUP.md` for first build and installation instructions.
-The initial Kotlin source may have unresolved build or device-specific issues.
-Real-time F1 access and Samsung background/overlay behavior also remain unverified.
+- Source code updated from the v0.1 Kotlin-fix project and packaged for GitHub Actions.
+- Kotlin setter collisions (`setAutoF1`, `setAccent`, `setFocus`) are absent from the updated source.
+- Source delimiter balance and file layout were checked programmatically.
+- **Not compiled against Android SDK or tested on a Z Flip5 in this environment.** A full Android build is needed to confirm correctness.
+- `.github/workflows/build-apk.yml` installs Android API 36 and Gradle 9.4.1 on GitHub's hosted runner.
+- Camera alignment, touches around the actual cutout, outside-touch delivery, screen rotation, battery behavior, and Android 15/One UI overlay limits need testing on the real device.
+- OpenF1 historical trace and optional weather/pit endpoints require a live network test; location and event availability vary by driver and session.
+- OpenF1 paid live data is not authenticated in this personal-source build. Schedule detection isn't guaranteed real-time telemetry.
+- Debug APK signatures may change across cloud runs; read GITHUB_SETUP.md before updating an installed app.

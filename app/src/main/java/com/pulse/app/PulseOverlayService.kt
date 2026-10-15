@@ -11,315 +11,425 @@ import android.graphics.drawable.GradientDrawable
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.transition.AutoTransition
+import android.transition.TransitionManager
 import android.view.*
-import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import kotlin.math.abs
 
-/** A foreground, user-enabled overlay. No accessibility service or hidden screen capture is used. */
+/** Camera-aligned, user-enabled main-display overlay. A display-cutout position is best-effort:
+ * Android / One UI can restrict drawing above the status bar. The manual offset is intentional.
+ */
 class PulseOverlayService : Service() {
     companion object {
         @Volatile var instance: PulseOverlayService? = null
             private set
         fun start(context: Context) {
-            val i = Intent(context, PulseOverlayService::class.java)
-            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
+            val intent=Intent(context,PulseOverlayService::class.java)
+            if (Build.VERSION.SDK_INT>=26) context.startForegroundService(intent) else context.startService(intent)
         }
-        fun stop(context: Context) { context.stopService(Intent(context, PulseOverlayService::class.java)) }
+        fun stop(context: Context) { context.stopService(Intent(context,PulseOverlayService::class.java)) }
     }
-    private val handler = Handler(Looper.getMainLooper())
+    private inner class PillRoot(context: Context) : LinearLayout(context) {
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+            if (event.actionMasked==MotionEvent.ACTION_OUTSIDE) {
+                if (expanded) { expanded=false; refreshUi() }
+                return false
+            }
+            return super.dispatchTouchEvent(event)
+        }
+    }
+    private val handler=Handler(Looper.getMainLooper())
     private lateinit var windows: WindowManager
-    private var root: LinearLayout? = null
-    private var header: LinearLayout? = null
-    private var heading: TextView? = null
-    private var pillParams: WindowManager.LayoutParams? = null
-    private var expanded = false
-    private var chatWindow: LinearLayout? = null
-    private var chatParams: WindowManager.LayoutParams? = null
-    private val chatTurns = mutableListOf<Pair<String, String>>()
-    private var chatHistory: TextView? = null
-    private var mediaController: MediaController? = null
-    private var mediaTitle = "No active media"
-    private var transientNotice: String? = null
-    private var cycle = 0
-    private val tick = object : Runnable {
+    private var root: PillRoot?=null
+    private var header: FrameLayout?=null
+    private var headerTitle: TextView?=null
+    private var panel: LinearLayout?=null
+    private var f1Line: TextView?=null
+    private var f1EventLine: TextView?=null
+    private var f1WeatherLine: TextView?=null
+    private var f1Track: TrackMapView?=null
+    private var params: WindowManager.LayoutParams?=null
+    private var expanded=false
+    private var dragging=false
+    private var lastShape=""
+    private var lastRender=""
+    private var chatWindow: LinearLayout?=null
+    private val chatTurns=mutableListOf<Pair<String,String>>()
+    private var chatHistory: TextView?=null
+    private var mediaController: MediaController?=null
+    private var mediaTitle="No active media"
+    private var mediaActive=false
+    private var transientNotice: String?=null
+    private var cycle=0
+    private val tick=object: Runnable {
         override fun run() {
             cycle++
             F1Store.tick()
-            if (PulseSettings.f1On && (cycle == 1 || cycle % 30 == 0)) F1Store.checkAutomaticLive()
-            if (cycle == 1 || cycle % 5 == 0) checkMedia()
+            if(cycle%5==0) F1Store.refreshLiveIfNeeded()
+            if (PulseSettings.f1On && (cycle==1 || cycle%30==0)) F1Store.checkAutomaticLive()
+            if (cycle==1 || cycle%5==0) checkMedia()
             refreshUi()
-            handler.postDelayed(this, 1000)
+            handler.postDelayed(this,1000)
         }
     }
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder?=null
     override fun onCreate() {
         super.onCreate()
         PulseSettings.init(this)
-        instance = this
-        windows = getSystemService(WINDOW_SERVICE) as WindowManager
-        val channel = NotificationChannel("pulse_running", "Pulse running", NotificationManager.IMPORTANCE_LOW)
+        instance=this
+        windows=getSystemService(WINDOW_SERVICE) as WindowManager
+        val channel=NotificationChannel("pulse_running","Pulse running",NotificationManager.IMPORTANCE_LOW)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-        val intent = PendingIntent.getActivity(this,0,Intent(this, MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notification = Notification.Builder(this,"pulse_running")
-            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Pulse is running")
-            .setContentText("Tap to open Pulse settings").setContentIntent(intent)
-            .setOngoing(true).build()
+        val intent=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification=Notification.Builder(this,"pulse_running")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Pulse is running")
+            .setContentText("Tap for Pulse settings")
+            .setContentIntent(intent).setOngoing(true).build()
         startForeground(100,notification)
         if (Settings.canDrawOverlays(this) && PulseSettings.overlayOn) buildPill()
         handler.post(tick)
     }
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!PulseSettings.overlayOn || !Settings.canDrawOverlays(this)) {
-            stopSelf(); return START_NOT_STICKY
-        }
-        if (root == null) buildPill()
+    override fun onStartCommand(intent: Intent?,flags: Int,startId: Int): Int {
+        if (!PulseSettings.overlayOn || !Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
+        if (root==null) buildPill()
         refreshUi()
         return START_STICKY
     }
-    private fun dp(value: Int): Int = (value*resources.displayMetrics.density).toInt()
-    private fun background(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
-        setColor(color); cornerRadius = dp(radius).toFloat()
+    private fun dp(value: Int)=(value*resources.displayMetrics.density).toInt()
+    private fun bg(color: Int, radius: Int, outline: Int?=null): GradientDrawable = GradientDrawable().apply {
+        setColor(color); cornerRadius=dp(radius).toFloat()
+        if (outline!=null) setStroke(dp(1),outline)
     }
-    private fun text(value: String, size: Float = 13f, color: Int = Color.WHITE): TextView = TextView(this).apply {
-        this.text = value; textSize = size; setTextColor(color); gravity = Gravity.CENTER_VERTICAL
+    private fun label(text: String,size: Float=13f,color: Int=Color.WHITE): TextView = TextView(this).apply {
+        this.text=text; textSize=size; setTextColor(color); gravity=Gravity.CENTER_VERTICAL
     }
-    private fun action(label: String, onClick: () -> Unit): TextView = text(label,12f).apply {
-        gravity = Gravity.CENTER; setPadding(dp(10),dp(9),dp(10),dp(9))
-        background = background(0xff363240.toInt(),12)
-        setOnClickListener { onClick() }
+    private fun button(title: String, action: ()->Unit): TextView = label(title,12f).apply {
+        gravity=Gravity.CENTER; background=bg(0xff292b36.toInt(),12,0xff343644.toInt())
+        setPadding(dp(10),dp(10),dp(10),dp(10));setOnClickListener {action()}
     }
-    private fun row(gap: Int = 5) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(gap),dp(gap),dp(gap),dp(gap))
+    private fun row(): LinearLayout = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
+    private fun col(): LinearLayout = LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+    private fun spacer(height: Int)=Space(this).apply { minimumHeight=dp(height) }
+    private fun cameraSize(): Int {
+        val override=PulseSettings.cameraDotSize
+        if(override>0) return dp(override)
+        val rect=cameraRect()
+        return if (rect==null) dp(19) else rect.width().coerceIn(dp(8),dp(36))
     }
-    private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-    private fun buildPill() {
-        if (root != null) return
-        root = column().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        header = row(0).apply {
-            background = background(0xff18171f.toInt(),32)
-            setPadding(dp(17),dp(10),dp(17),dp(10))
-            elevation = dp(7).toFloat()
+    private fun cameraRect(): android.graphics.Rect? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        val bounds=windows.currentWindowMetrics.bounds
+        return windows.currentWindowMetrics.windowInsets.displayCutout?.boundingRects
+            ?.filter { it.top < dp(100) }
+            ?.minByOrNull { abs(it.centerX()-bounds.centerX()) }
+    }
+    /** Offset is relative to the full screen for overlay windows using layout-in-screen. */
+    private fun cameraY(): Int = ((cameraRect()?.centerY() ?: dp(23))-dp(22)+dp(PulseSettings.cameraYOffset))
+        .coerceIn(-dp(12),resources.displayMetrics.heightPixels-dp(80))
+    private fun positionWindow() {
+        if (dragging) return
+        params?.let { p ->
+            p.x=if(PulseSettings.cameraAnchor) 0 else dp(PulseSettings.posX)
+            p.y=if(PulseSettings.cameraAnchor) cameraY() else dp(PulseSettings.posY)
+            root?.let { runCatching { windows.updateViewLayout(it,p) } }
         }
-        heading = text("PULSE",13f).apply { typeface = Typeface.DEFAULT_BOLD }
-        header!!.addView(heading)
-        root!!.addView(header!!, LinearLayout.LayoutParams(dp(PulseSettings.pillWidth), dp(43)))
-        initGestures()
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+    }
+    private fun buildPill() {
+        if (root!=null) return
+        val r=PillRoot(this).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_HORIZONTAL}
+        root=r
+        header=FrameLayout(this).apply { isClickable=true }
+        r.addView(header,LinearLayout.LayoutParams(dp(44),dp(44)))
+        attachGestures(header!!)
+        val lp=WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = PulseSettings.posX; y = dp(PulseSettings.posY) }
-        pillParams = params
-        try { windows.addView(root,params) } catch (_: Exception) { root = null }
+        ).apply {
+            gravity=Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            x=if(PulseSettings.cameraAnchor) 0 else dp(PulseSettings.posX)
+            y=if(PulseSettings.cameraAnchor) cameraY() else dp(PulseSettings.posY)
+        }
+        params=lp
+        try { windows.addView(r,lp) } catch (_:Exception) {root=null}
         refreshUi()
     }
-    private fun initGestures() {
-        var downX = 0f; var downY = 0f
-        var originalX = 0; var originalY = 0
-        var dragging = false
-        var swiped = false
-        val detector = GestureDetector(this,object : GestureDetector.SimpleOnGestureListener() {
+    private fun attachGestures(touch: View) {
+        var downX=0f;var downY=0f;var startX=0;var startY=0
+        var swiped=false
+        var longDragging=false
+        val detector=GestureDetector(this,object: GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean = true
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (!swiped && !dragging) { expanded = !expanded; refreshUi() }; return true
-            }
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (PulseSettings.aiOn) showChat()
+                if(!dragging && !swiped) {expanded=!expanded; refreshUi()}
                 return true
             }
-            override fun onLongPress(e: MotionEvent) { dragging = true }
+            override fun onDoubleTap(e: MotionEvent): Boolean {if(PulseSettings.aiOn) showChat();return true}
+            override fun onLongPress(e: MotionEvent) { longDragging=true;dragging=true }
         })
-        header?.setOnTouchListener { _, ev ->
-            detector.onTouchEvent(ev)
-            when (ev.actionMasked) {
+        touch.setOnTouchListener { _,e ->
+            detector.onTouchEvent(e)
+            when(e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = ev.rawX; downY = ev.rawY
-                    originalX = pillParams?.x ?: 0; originalY = pillParams?.y ?: 0
-                    dragging = false; swiped = false
+                    downX=e.rawX;downY=e.rawY;startX=params?.x?:0;startY=params?.y?:0
+                    dragging=false;longDragging=false;swiped=false
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (dragging) {
-                        pillParams?.let {
-                            it.x = originalX + (ev.rawX-downX).toInt()
-                            it.y = (originalY + (ev.rawY-downY).toInt()).coerceAtLeast(0)
-                            root?.let { view -> runCatching { windows.updateViewLayout(view,it) } }
+                    val dx=e.rawX-downX;val dy=e.rawY-downY
+                    if(!dragging && !swiped && abs(dy)>dp(9) && abs(dy)>abs(dx)*1.15) dragging=true
+                    if(!dragging && !swiped && abs(dx)>dp(42) && abs(dx)>abs(dy)*1.15) {
+                        swiped=true;switchFocus(if(dx<0) 1 else -1)
+                    }
+                    if(dragging) {
+                        val p=params
+                        if(p!=null) {
+                            val screenW=resources.displayMetrics.widthPixels
+                            val contentW=if(expanded) dp(350) else dp(PulseSettings.pillWidth)
+                            val maxX=((screenW-contentW)/2).coerceAtLeast(0)
+                            p.x=(startX+dx.toInt()).coerceIn(-maxX,maxX)
+                            p.y=(startY+dy.toInt()).coerceIn(-dp(14),resources.displayMetrics.heightPixels-dp(80))
+                            root?.let {runCatching {windows.updateViewLayout(it,p)}}
                         }
-                    } else if (abs(ev.rawX - downX) > dp(65) && abs(ev.rawX-downX) > abs(ev.rawY-downY)*1.3) {
-                        if (!swiped) { swiped = true; switchFocus(if (ev.rawX < downX) 1 else -1) }
                     }
                 }
-                MotionEvent.ACTION_UP -> if (dragging) {
-                    pillParams?.let { PulseSettings.setPosition(it.x,(it.y/resources.displayMetrics.density).toInt()) }
-                    handler.postDelayed({ dragging = false },350)
+                MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL -> {
+                    if(dragging) params?.let { PulseSettings.setPosition(
+                        (it.x/resources.displayMetrics.density).toInt(),(it.y/resources.displayMetrics.density).toInt()) }
+                    if(longDragging) { /* A long press can be followed by drag in both axes. */ }
+                    if(dragging) handler.postDelayed({dragging=false},220)
                 }
             }
             true
         }
     }
-    private fun enabledFocuses(): List<String> = buildList {
-        if (PulseSettings.f1On) add("F1")
-        if (PulseSettings.mediaOn) add("Media")
-        if (PulseSettings.notificationsOn) add("Notifications")
+    private fun f1Active(): Boolean {
+        if(!PulseSettings.f1On || F1Store.selectedSession==null) return false
+        return when(F1Store.mode) {
+            "REPLAY" -> F1Store.events.isNotEmpty()
+            "LIVE" -> F1Store.lastLiveRecord?.let {java.time.Duration.between(it,java.time.Instant.now()).seconds in 0..90} == true
+            else -> false
+        }
+    }
+    private fun anyActivity(): Boolean = f1Active() || (PulseSettings.mediaOn && mediaActive) || transientNotice!=null
+    private fun availableFocuses(): List<String> = buildList {
+        if (f1Active()) add("F1")
+        if (PulseSettings.mediaOn && mediaActive) add("Media")
+        if (PulseSettings.notificationsOn && transientNotice!=null) add("Notifications")
         if (PulseSettings.aiOn) add("AI")
-    }.ifEmpty { listOf("Pulse") }
+        add("Settings")
+    }
+    private fun focus(): String {
+        val options=availableFocuses()
+        return if(PulseSettings.focus in options) PulseSettings.focus else options.first()
+    }
     private fun switchFocus(dir: Int) {
-        val list = enabledFocuses()
-        val i = list.indexOf(PulseSettings.focus).takeIf { it >= 0 } ?: 0
-        PulseSettings.updateFocus(list[(i+dir+list.size)%list.size]); refreshUi()
+        val list=availableFocuses();val i=list.indexOf(focus()).coerceAtLeast(0)
+        PulseSettings.updateFocus(list[(i+dir+list.size)%list.size]);refreshUi()
     }
     fun briefNotification(title: String) {
-        if (!PulseSettings.notificationsOn) return
-        transientNotice = title
+        if(!PulseSettings.notificationsOn) return
+        transientNotice=title
         refreshUi()
-        handler.postDelayed({ if (transientNotice == title) { transientNotice = null; refreshUi() } },4500)
+        handler.postDelayed({if(transientNotice==title){transientNotice=null;refreshUi()}},4000)
     }
     private fun checkMedia() {
-        if (!PulseSettings.mediaOn) { mediaController = null; return }
+        if(!PulseSettings.mediaOn) {mediaController=null;mediaActive=false;return}
         try {
-            val manager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
-            val sessions = manager.getActiveSessions(ComponentName(this,PulseNotificationListener::class.java))
-            mediaController = sessions.firstOrNull { it.playbackState != null }
-            val metadata = mediaController?.metadata
-            mediaTitle = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "No active media"
-        } catch (_: SecurityException) {
-            mediaController = null; mediaTitle = "Enable notification access for media"
-        } catch (_: Exception) { mediaTitle = "Media unavailable" }
+            val manager=getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val sessions=manager.getActiveSessions(ComponentName(this,PulseNotificationListener::class.java))
+            mediaController=sessions.firstOrNull { it.playbackState!=null }
+            val state=mediaController?.playbackState?.state
+            mediaActive=mediaController!=null && state!=null && state!=PlaybackState.STATE_NONE && state!=PlaybackState.STATE_STOPPED
+            mediaTitle=mediaController?.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Media player"
+        } catch (_:SecurityException) {mediaActive=false;mediaTitle="Media permission needed"}
+        catch (_:Exception) {mediaActive=false;mediaTitle="Media unavailable"}
+    }
+    private fun refreshF1Values() {
+        if(!expanded || focus()!="F1") return
+        f1Line?.text="Driver #${PulseSettings.selectedDriver}  ·  ${F1Store.currentPosition()}  ·  Lap ${F1Store.currentLap()}"
+        f1EventLine?.text="Race control: ${F1Store.currentEvent().take(84)}"
+        f1WeatherLine?.text=F1Store.currentWeather()
+        f1Track?.setTrace(F1Store.track.toList(),F1Store.lapProgress())
     }
     fun refreshUi() {
-        val r = root ?: return
-        if (!PulseSettings.overlayOn) return
-        val currentFocus = enabledFocuses().let { if (PulseSettings.focus in it) PulseSettings.focus else it.first() }
-        val latest = F1Store.lastLiveRecord
-        val fresh = latest != null && java.time.Duration.between(latest,java.time.Instant.now()).seconds in 0..90
-        heading?.apply {
-            text = when {
-                transientNotice != null -> "●  ${transientNotice}"
-                currentFocus == "F1" -> "◉  F1 ${if (F1Store.mode == "LIVE" && fresh) "LIVE" else F1Store.mode}"
-                currentFocus == "Media" -> "♫  ${mediaTitle.take(24)}"
-                currentFocus == "Notifications" -> "▣  Notifications"
-                currentFocus == "AI" -> "✦  Pulse AI"
-                else -> "PULSE"
+        val r=root ?:return
+        if(!PulseSettings.overlayOn || dragging) return
+        val active=anyActivity() || expanded
+        val focus=focus()
+        val shape="$active-$expanded-$focus-${PulseSettings.pillWidth}-${PulseSettings.accent}-${PulseSettings.cameraDotSize}"
+        val render="$shape|${PulseSettings.selectedDriver}|${PulseSettings.animationsOn}|$mediaTitle|$transientNotice|${F1Store.status}|${F1Store.trackStatus}|${F1Store.track.size}|${F1Store.events.size}|${F1Store.playing}"
+        if (render==lastRender) {refreshF1Values();positionWindow();return}
+        lastRender=render
+        if(shape!=lastShape && PulseSettings.animationsOn) TransitionManager.beginDelayedTransition(r,AutoTransition().apply{duration=190})
+        lastShape=shape
+        val h=header ?:return
+        h.removeAllViews()
+        if(!active) {
+            h.background=null
+            val diameter=cameraSize()
+            val dot=View(this).apply {background=bg(Color.BLACK,50)}
+            h.addView(dot,FrameLayout.LayoutParams(diameter,diameter,Gravity.CENTER))
+            h.layoutParams=LinearLayout.LayoutParams(dp(44),dp(44))
+        } else {
+            h.background=bg(0xff090a0e.toInt(),50,0xff343644.toInt())
+            h.elevation=dp(8).toFloat()
+            h.layoutParams=LinearLayout.LayoutParams(dp(PulseSettings.pillWidth),dp(44))
+            val content=row().apply {
+                setPadding(dp(10),0,dp(12),0)
+                gravity=Gravity.CENTER_VERTICAL
             }
-            setTextColor(PulseSettings.accent)
-            maxLines = 1
+            val lead=label(when {transientNotice!=null -> "●";focus=="F1" -> "◉";focus=="Media" -> "♫";focus=="AI" -> "✦";else -> "•"},13f,PulseSettings.accent)
+            content.addView(lead,LinearLayout.LayoutParams(dp(16),-1))
+            // Nothing is drawn across the central selfie-camera hole.
+            content.addView(Space(this),LinearLayout.LayoutParams((cameraSize()+dp(9)).coerceAtLeast(dp(26)),-1))
+            val title=label(when {
+                transientNotice!=null -> transientNotice!!.take(26)
+                focus=="F1" -> if(F1Store.mode=="LIVE") "F1 LIVE" else "F1 REPLAY"
+                focus=="Media" -> mediaTitle.take(20)
+                focus=="AI" -> "Pulse AI"
+                else -> "Pulse"
+            },12f,Color.WHITE).apply{typeface=Typeface.DEFAULT_BOLD;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}
+            headerTitle=title
+            content.addView(title,LinearLayout.LayoutParams(0,-1,1f))
+            h.addView(content,FrameLayout.LayoutParams(-1,-1))
         }
-        val width = dp(PulseSettings.pillWidth)
-        header?.layoutParams = LinearLayout.LayoutParams(width,dp(43))
-        while (r.childCount > 1) r.removeViewAt(1)
-        if (expanded) {
-            val panel = column().apply {
-                background = background(0xff22212c.toInt(),18)
-                setPadding(dp(10),dp(10),dp(10),dp(12))
+        r.removeViews(1,(r.childCount-1).coerceAtLeast(0))
+        f1Line=null; f1EventLine=null; f1WeatherLine=null; f1Track=null
+        if(expanded) {
+            val p=col().apply {
+                background=bg(0xff12141b.toInt(),22,0xff303441.toInt())
+                setPadding(dp(15),dp(13),dp(15),dp(15))
+                elevation=dp(10).toFloat()
             }
-            panel.addView(text("${currentFocus.uppercase()}  •  swipe pill to change focus",11f,0xffaaa5b8.toInt()))
-            when (currentFocus) {
+            val top=row()
+            top.addView(label(focus.uppercase(),14f,PulseSettings.accent).apply{typeface=Typeface.DEFAULT_BOLD},LinearLayout.LayoutParams(0,dp(32),1f))
+            top.addView(button("×") {expanded=false;refreshUi()})
+            p.addView(top)
+            p.addView(spacer(8))
+            when(focus) {
                 "F1" -> {
-                    panel.addView(text(F1Store.selectedSession?.label ?: "No F1 session selected",12f))
-                    panel.addView(text("Driver #${PulseSettings.selectedDriver}  ${F1Store.currentPosition()}  Lap ${F1Store.currentLap()}",14f))
-                    panel.addView(text(F1Store.status.take(110),11f,0xffa9a7b8.toInt()))
-                    val controls = row()
-                    controls.addView(action("−15s") { F1Store.seekSeconds(-15) })
-                    controls.addView(action(if (F1Store.playing) "Pause" else "Play") { F1Store.togglePlay() })
-                    controls.addView(action("+15s") { F1Store.seekSeconds(15) })
-                    controls.addView(action("Latest") { F1Store.goLatest() })
-                    panel.addView(controls)
+                    p.addView(label(F1Store.selectedSession?.label ?: "No session",13f))
+                    p.addView(spacer(8))
+                    f1Line=label("Driver #${PulseSettings.selectedDriver}  ·  ${F1Store.currentPosition()}  ·  Lap ${F1Store.currentLap()}",13f)
+                    p.addView(f1Line)
+                    p.addView(spacer(8))
+                    if(F1Store.track.isNotEmpty()) {
+                        f1Track=TrackMapView(this).apply {setTrace(F1Store.track.toList(),F1Store.lapProgress())}
+                        p.addView(f1Track,LinearLayout.LayoutParams(-1,dp(150)))
+                        p.addView(label("Approximate lap progress · not precise GPS",10f,0xffa7a7b3.toInt()))
+                    } else p.addView(label(F1Store.trackStatus.take(110),11f,0xffb3afc2.toInt()))
+                    p.addView(spacer(8))
+                    f1EventLine=label("Race control: ${F1Store.currentEvent().take(84)}",11f,0xffa6a8b5.toInt())
+                    p.addView(f1EventLine)
+                    f1WeatherLine=label(F1Store.currentWeather(),11f,0xffa6a8b5.toInt())
+                    p.addView(f1WeatherLine)
+                    p.addView(spacer(10))
+                    val controls=row()
+                    controls.addView(button("−15s") {F1Store.seekSeconds(-15)})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button(if(F1Store.playing) "Pause" else "Play") {F1Store.togglePlay()})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button("+15s") {F1Store.seekSeconds(15)})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button("Latest") {F1Store.goLatest()})
+                    p.addView(controls)
+                    p.addView(spacer(9))
+                    p.addView(button("Stop F1 replay / timeline") {F1Store.stopPlayback(); expanded=false;refreshUi()})
                 }
                 "Media" -> {
-                    panel.addView(text(mediaTitle,13f))
-                    val controls = row()
-                    controls.addView(action("◀◀") { mediaController?.transportControls?.skipToPrevious() })
-                    controls.addView(action("Play") { mediaController?.transportControls?.play() })
-                    controls.addView(action("Pause") { mediaController?.transportControls?.pause() })
-                    controls.addView(action("▶▶") { mediaController?.transportControls?.skipToNext() })
-                    panel.addView(controls)
+                    p.addView(label(mediaTitle,15f));p.addView(spacer(10))
+                    val controls=row()
+                    controls.addView(button("◀◀") {mediaController?.transportControls?.skipToPrevious()})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button("Play") {mediaController?.transportControls?.play()})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button("Pause") {mediaController?.transportControls?.pause()})
+                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+                    controls.addView(button("▶▶") {mediaController?.transportControls?.skipToNext()})
+                    p.addView(controls)
                 }
-                "AI" -> panel.addView(action("Open floating chat") { showChat() })
-                "Notifications" -> panel.addView(text("Recent notifications appear temporarily on the pill.",12f))
-                else -> panel.addView(text("Enable a feature in Control Center.",12f))
+                "AI" -> p.addView(button("Open floating AI chat") {showChat();expanded=false;refreshUi()})
+                "Notifications" -> p.addView(label(transientNotice ?: "No new notifications",13f))
+                else -> p.addView(label("No active sessions. Configure Pulse or choose a replay.",12f))
             }
-            val bottom = row()
-            bottom.addView(action("AI") { if (PulseSettings.aiOn) showChat() })
-            bottom.addView(action("Settings") {
+            p.addView(spacer(12))
+            val footer=row()
+            footer.addView(button("AI") {if(PulseSettings.aiOn){showChat();expanded=false;refreshUi()}})
+            footer.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
+            footer.addView(button("Control Center") {
+                expanded=false;refreshUi()
                 startActivity(Intent(this,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             })
-            bottom.addView(action("Close") { expanded = false; refreshUi() })
-            panel.addView(bottom)
-            r.addView(panel,LinearLayout.LayoutParams(dp(332),WindowManager.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        }
-        pillParams?.let { params -> runCatching { windows.updateViewLayout(r,params) } }
+            p.addView(footer)
+            panel=p
+            val screenW=resources.displayMetrics.widthPixels
+            val width=(screenW-dp(20)).coerceAtMost(dp(350))
+            r.addView(p,LinearLayout.LayoutParams(width,-2).apply {topMargin=dp(8)})
+        } else panel=null
+        positionWindow()
     }
     private fun showChat() {
-        if (chatWindow != null) return
-        val container = column().apply {
-            background = background(0xff201e29.toInt(),18)
-            setPadding(dp(13),dp(12),dp(13),dp(12))
-            elevation = dp(10).toFloat()
-        }
-        val bar = row()
-        bar.addView(text("✦ Pulse AI",16f,PulseSettings.accent).apply { typeface = Typeface.DEFAULT_BOLD }, LinearLayout.LayoutParams(0,dp(34),1f))
-        bar.addView(action("−") { hideChat() })
-        bar.addView(action("×") { hideChat(clear = true) })
-        container.addView(bar)
-        val scroll = ScrollView(this)
-        val previous = chatTurns.joinToString("\n") { (role, content) ->
-            "${if (role == "user") "You" else "Pulse"}: $content"
-        }
-        chatHistory = text("Ask Pulse anything. API usage may cost money.\n$previous",13f).apply {
-            setTextColor(Color.WHITE); gravity = Gravity.TOP
-        }
+        if(chatWindow!=null) return
+        val body=col().apply {background=bg(0xff14161e.toInt(),22,0xff353344.toInt());setPadding(dp(14),dp(14),dp(14),dp(14));elevation=dp(10).toFloat()}
+        val bar=row()
+        bar.addView(label("✦  Pulse AI",16f,PulseSettings.accent).apply{typeface=Typeface.DEFAULT_BOLD},LinearLayout.LayoutParams(0,dp(40),1f))
+        bar.addView(button("×") {closeChat()})
+        body.addView(bar)
+        val scroll=ScrollView(this)
+        chatHistory=label("Ask Pulse anything. OpenAI API usage may cost money.\n"+chatTurns.joinToString("\n"){"${if(it.first=="user") "You" else "Pulse"}: ${it.second}"},13f).apply{gravity=Gravity.TOP}
         scroll.addView(chatHistory)
-        container.addView(scroll,LinearLayout.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT,dp(190)))
-        val entry = row()
-        val input = EditText(this).apply {
-            hint = "Message…"; setHintTextColor(0xffa7a1b8.toInt()); setTextColor(Color.WHITE)
-            textSize = 13f; setSingleLine(false); maxLines = 3; background = background(0xff34313e.toInt(),12)
-            setPadding(dp(10),dp(7),dp(10),dp(7))
+        body.addView(scroll,LinearLayout.LayoutParams(-1,dp(190)))
+        body.addView(spacer(10))
+        val entry=row()
+        val input=EditText(this).apply {
+            hint="Ask something…";setHintTextColor(0xff9a9cab.toInt());setTextColor(Color.WHITE)
+            textSize=13f;setSingleLine(false);maxLines=3
+            background=bg(0xff252834.toInt(),12);setPadding(dp(10),dp(8),dp(10),dp(8))
         }
-        entry.addView(input,LinearLayout.LayoutParams(0,WindowManager.LayoutParams.WRAP_CONTENT,1f))
-        val send = action("Send") {
-            val question = input.text.toString().trim()
-            if (question.isNotBlank()) {
-                input.setText("")
-                chatTurns.add("user" to question)
+        entry.addView(input,LinearLayout.LayoutParams(0,-2,1f))
+        entry.addView(button("Send") {
+            val question=input.text.toString().trim()
+            if(question.isNotBlank()) {
+                input.setText("");chatTurns.add("user" to question)
                 chatHistory?.append("\nYou: $question\nPulse: …")
-                val request = chatTurns.toList()
-                AiClient.ask(this,request) { result ->
-                    result.onSuccess { chatTurns.add("assistant" to it) }
-                    val response = result.getOrElse { "Error: ${it.message}" }
-                    chatHistory?.append("\n$response\n")
-                    scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+                AiClient.ask(this,chatTurns.toList()) {result ->
+                    val answer=result.getOrElse {"Error: ${it.message}"}
+                    result.onSuccess {chatTurns.add("assistant" to it)}
+                    chatHistory?.append("\n$answer\n")
+                    scroll.post {scroll.fullScroll(View.FOCUS_DOWN)}
                 }
             }
-        }
-        entry.addView(send)
-        container.addView(entry)
-        val params = WindowManager.LayoutParams(dp(325),WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+        })
+        body.addView(entry)
+        val lp=WindowManager.LayoutParams(dp(335),-2,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = dp(130)
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            gravity=Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y=dp(95)
+            softInputMode=WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
-        chatParams = params; chatWindow = container
-        try { windows.addView(container,params) } catch (_: Exception) { chatWindow = null }
+        chatWindow=body
+        try {windows.addView(body,lp)} catch (_:Exception) {chatWindow=null}
     }
-    private fun hideChat(clear: Boolean = false) {
-        chatWindow?.let { runCatching { windows.removeView(it) } }; chatWindow = null; chatHistory = null
-        if (clear) chatTurns.clear()
+    private fun closeChat() {
+        chatWindow?.let {runCatching {windows.removeView(it)}};chatWindow=null;chatHistory=null
     }
     override fun onDestroy() {
-        handler.removeCallbacks(tick); hideChat()
-        root?.let { runCatching { windows.removeView(it) } }; root = null
-        instance = null
+        handler.removeCallbacks(tick);closeChat()
+        root?.let {runCatching {windows.removeView(it)}};root=null
+        instance=null
         super.onDestroy()
     }
 }
