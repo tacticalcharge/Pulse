@@ -173,7 +173,7 @@ class PulseOverlayService : Service() {
     private fun switchFocus(dir: Int) {
         val list = enabledFocuses()
         val i = list.indexOf(PulseSettings.focus).takeIf { it >= 0 } ?: 0
-        PulseSettings.setFocus(list[(i+dir+list.size)%list.size]); refreshUi()
+        PulseSettings.updateFocus(list[(i+dir+list.size)%list.size]); refreshUi()
     }
     fun briefNotification(title: String) {
         if (!PulseSettings.notificationsOn) return

@@ -137,7 +137,7 @@ object F1Store {
                             lastAutoFocused = active.key
                             selectedSession = active; mode = "LIVE"; events.clear()
                             cursorMs = now.toEpochMilli(); playing = true
-                            PulseSettings.setFocus("F1")
+                            PulseSettings.updateFocus("F1")
                             PulseOverlayService.instance?.refreshUi()
                         }
                         pollLive(active)

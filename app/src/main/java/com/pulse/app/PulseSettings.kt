@@ -43,7 +43,7 @@ object PulseSettings {
     private fun save(key: String, value: Int) = prefs.edit().putInt(key, value).apply()
     private fun save(key: String, value: String) = prefs.edit().putString(key, value).apply()
     fun setOverlay(v: Boolean) { overlayOn = v; save("overlayOn",v) }
-    fun setF1(v: Boolean) { f1On = v; save("f1On",v); if (!v && focus == "F1") setFocus("Media") }
+    fun setF1(v: Boolean) { f1On = v; save("f1On",v); if (!v && focus == "F1") updateFocus("Media") }
     fun updateAutoF1(v: Boolean) { autoF1 = v; save("autoF1",v) }
     fun setMedia(v: Boolean) { mediaOn = v; save("mediaOn",v) }
     fun setNotifications(v: Boolean) { notificationsOn = v; save("notificationsOn",v) }

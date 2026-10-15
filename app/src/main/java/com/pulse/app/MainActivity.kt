@@ -102,7 +102,7 @@ private fun PulseApp(
                     }
                     Section("Quick switches") {
                         Toggle("F1",PulseSettings.f1On,{ PulseSettings.setF1(it);update() })
-                        Toggle("Automatic F1 focus on session start",PulseSettings.autoF1,{ PulseSettings.setAutoF1(it);update() })
+                        Toggle("Automatic F1 focus on session start",PulseSettings.autoF1,{ PulseSettings.updateAutoF1(it);update() })
                         Toggle("Media",PulseSettings.mediaOn,{ PulseSettings.setMedia(it);update() })
                         Toggle("Notifications",PulseSettings.notificationsOn,{ PulseSettings.setNotifications(it);update() })
                         Toggle("OpenAI chat",PulseSettings.aiOn,{ PulseSettings.setAi(it);update() })
@@ -115,7 +115,7 @@ private fun PulseApp(
                 "F1" -> {
                     Section("F1 data and replay") {
                         Toggle("Enable F1",PulseSettings.f1On,{PulseSettings.setF1(it);update()})
-                        Toggle("Auto-focus F1 at a scheduled session start",PulseSettings.autoF1,{PulseSettings.setAutoF1(it);update()})
+                        Toggle("Auto-focus F1 at a scheduled session start",PulseSettings.autoF1,{PulseSettings.updateAutoF1(it);update()})
                         Text("Session detection is schedule-based. A confirmed live feed requires recent API data; unavailable data is labelled.",fontSize=12.sp,color=Color.LightGray)
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             listOf(2026,2025,2024,2023).forEach { year ->
@@ -180,7 +180,7 @@ private fun PulseApp(
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                             listOf("Violet" to 0xffac91ff.toInt(),"Cyan" to 0xff63dce6.toInt(),
                                 "Pink" to 0xffff91be.toInt(),"Green" to 0xff8be6a5.toInt()).forEach { (name,col) ->
-                                AssistChip(onClick={PulseSettings.setAccent(col);update()},label={Text(name)})
+                                AssistChip(onClick={PulseSettings.updateAccent(col);update()},label={Text(name)})
                             }
                         }
                         Text("Long-press and drag the pill to change its position.",fontSize=12.sp,color=Color.LightGray)
