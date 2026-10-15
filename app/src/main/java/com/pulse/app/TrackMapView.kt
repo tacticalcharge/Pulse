@@ -44,8 +44,8 @@ class TrackMapView(context: Context) : View(context) {
         val idx=((samples.size-1)*progress).toInt().coerceIn(0,samples.size-1)
         val (px,py)=at(samples[idx])
         fill.color=Color.argb(90,164,148,255)
-        canvas.drawCircle(px,11f*resources.displayMetrics.density/2f,fill)
+        canvas.drawCircle(px,py,11f*resources.displayMetrics.density/2f,fill)
         fill.color=Color.WHITE
-        canvas.drawCircle(px,4f*resources.displayMetrics.density/2f,fill)
+        canvas.drawCircle(px,py,4f*resources.displayMetrics.density/2f,fill)
     }
 }

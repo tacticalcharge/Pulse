@@ -195,7 +195,7 @@ private fun HomeTab(overlayGranted:Boolean,requestOverlay:()->Unit,enableOverlay
                 Text(if(active) "F1 ${F1Store.mode}" else "Quiet mode",fontWeight=FontWeight.SemiBold)
                 Note(if(active) F1Store.selectedSession?.label ?: "Session loading" else "Nothing to display? The camera remains unobtrusive.")
             }
-            if(active) DarkButton("Stop") {F1Store.stopPlayback();update()}
+            if(active) DarkButton("Stop", onClick={ F1Store.stopPlayback();update() })
         }
     }
 }
@@ -283,24 +283,24 @@ private fun RacingTab(update:()->Unit) {
                 .format(Instant.ofEpochMilli(F1Store.cursorMs)),fontSize=12.sp,color=Muted)
         }
         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            DarkButton("◀ Event") {F1Store.jumpEvent(false)}
-            DarkButton("−15s") {F1Store.seekSeconds(-15)}
-            Button(onClick={F1Store.togglePlay},enabled=F1Store.events.isNotEmpty()) {Text(if(F1Store.playing) "Pause" else "Play")}
-            DarkButton("+15s") {F1Store.seekSeconds(15)}
-            DarkButton("Event ▶") {F1Store.jumpEvent(true)}
-            DarkButton("Latest") {F1Store.goLatest()}
+            DarkButton("◀ Event", onClick={ F1Store.jumpEvent(false) })
+            DarkButton("−15s", onClick={ F1Store.seekSeconds(-15) })
+            Button(onClick={F1Store.togglePlay()},enabled=F1Store.events.isNotEmpty()) {Text(if(F1Store.playing) "Pause" else "Play")}
+            DarkButton("+15s", onClick={ F1Store.seekSeconds(15) })
+            DarkButton("Event ▶", onClick={ F1Store.jumpEvent(true) })
+            DarkButton("Latest", onClick={ F1Store.goLatest() })
         }
         if(F1Store.mode!="IDLE") {
             Button(onClick={F1Store.stopPlayback();update()},modifier=Modifier.fillMaxWidth(),colors=ButtonDefaults.buttonColors(containerColor=Color(0xff3d252e))) {
                 Text("Stop replay / hide F1 timeline",color=Color(0xffffbec7))
             }
         }
-        if(F1Store.liveSession!=null) DarkButton("Follow current session") {F1Store.watchLiveNow();update()}
+        if(F1Store.liveSession!=null) DarkButton("Follow current session", onClick={ F1Store.watchLiveNow();update() })
         OutlinedTextField(value=driverNumber,onValueChange={driverNumber=it.filter(Char::isDigit).take(2)},singleLine=true,
             label={Text("Selected driver car number")},modifier=Modifier.fillMaxWidth(),keyboardOptions=KeyboardOptions.Default)
-        DarkButton("Apply driver") {
+        DarkButton("Apply driver", onClick={
             driverNumber.toIntOrNull()?.takeIf {it in 1..99}?.let {PulseSettings.setDriver(it);F1Store.reloadTrackForDriver();update()}
-        }
+        })
     }
     if(F1Store.events.isNotEmpty()) Group("Timing order","Positions reconstructed from available timestamped updates. May be incomplete.") {
         val table=F1Store.positionTable()
@@ -346,7 +346,7 @@ private fun DesignTab(update:()->Unit) {
         Slider(value=PulseSettings.cameraYOffset.toFloat(),onValueChange={PulseSettings.setCameraYOffset(it.toInt());update()},valueRange=-45f..160f)
         Row(verticalAlignment=Alignment.CenterVertically) {
             Text("Camera cover · ${if(PulseSettings.cameraDotSize==0) "Automatic" else "${PulseSettings.cameraDotSize} dp"}",Modifier.weight(1f),fontWeight=FontWeight.Medium)
-            DarkButton("Auto") {PulseSettings.setCameraDotSize(0);update()}
+            DarkButton("Auto", onClick={ PulseSettings.setCameraDotSize(0);update() })
         }
         Slider(value=(PulseSettings.cameraDotSize.takeIf{it>0} ?: 19).toFloat(),
             onValueChange={PulseSettings.setCameraDotSize(it.toInt());update()},valueRange=8f..42f)
