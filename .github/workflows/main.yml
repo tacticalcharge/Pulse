@@ -26,7 +26,7 @@ jobs:
       - name: Install Android SDK on GitHub runner
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;36.0.0'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
 
       # The original prototype has no Gradle wrapper JAR. This action supplies
       # Gradle on the hosted runner instead of relying on ./gradlew.
