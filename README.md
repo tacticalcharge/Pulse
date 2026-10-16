@@ -1,6 +1,8 @@
-# Pulse v0.2 — Galaxy Z Flip5 camera-island prototype
+# Pulse v0.3 — Galaxy Z Flip5 camera-island prototype
 
 Native Kotlin/Compose Android app, compiled with GitHub Actions. **This is source code, not an already-built APK.** GitHub's `Build Pulse APK` workflow produces an installable debug APK after a successful run.
+
+**New in v0.3:** [Camera interaction, animation and OpenF1 rate limiting](V0.3_CHANGES.md).
 
 ## What's new
 

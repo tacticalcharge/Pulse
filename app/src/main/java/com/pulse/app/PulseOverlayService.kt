@@ -4,10 +4,12 @@ import android.app.*
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -19,6 +21,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.transition.AutoTransition
 import android.transition.TransitionManager
+import android.view.animation.PathInterpolator
 import android.view.*
 import android.widget.*
 import kotlin.math.abs
@@ -39,17 +42,19 @@ class PulseOverlayService : Service() {
     private inner class PillRoot(context: Context) : LinearLayout(context) {
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             if (event.actionMasked==MotionEvent.ACTION_OUTSIDE) {
-                if (expanded) { expanded=false; refreshUi() }
+                if (expanded) toggleExpanded()
                 return false
             }
             return super.dispatchTouchEvent(event)
         }
     }
     private val handler=Handler(Looper.getMainLooper())
+    private val floatIn=PathInterpolator(0.16f,0.85f,0.22f,1f)
     private lateinit var windows: WindowManager
     private var root: PillRoot?=null
     private var header: FrameLayout?=null
     private var headerTitle: TextView?=null
+    private var preview: TextView?=null
     private var panel: LinearLayout?=null
     private var f1Line: TextView?=null
     private var f1EventLine: TextView?=null
@@ -112,8 +117,49 @@ class PulseOverlayService : Service() {
         this.text=text; textSize=size; setTextColor(color); gravity=Gravity.CENTER_VERTICAL
     }
     private fun button(title: String, action: ()->Unit): TextView = label(title,12f).apply {
-        gravity=Gravity.CENTER; background=bg(0xff292b36.toInt(),12,0xff343644.toInt())
-        setPadding(dp(10),dp(10),dp(10),dp(10));setOnClickListener {action()}
+        gravity=Gravity.CENTER
+        background=ripple(0xff252733.toInt(),14)
+        minHeight=dp(42)
+        setPadding(dp(13),dp(9),dp(13),dp(9));setOnClickListener {action()}
+    }
+    private fun ripple(color: Int, radius: Int) = RippleDrawable(
+        ColorStateList.valueOf(0x39b6adff),bg(color,radius),null
+    )
+    /** Native large touch area with title/subtitle, without a grid of squared-off buttons. */
+    private fun actionTile(symbol: String, title: String, detail: String, action: () -> Unit): View {
+        val item=row().apply {
+            background=ripple(0xff1b1e28.toInt(),17)
+            minimumHeight=dp(62)
+            setPadding(dp(13),dp(9),dp(13),dp(9))
+            isClickable=true
+            isFocusable=true
+            contentDescription="$title. $detail"
+            setOnClickListener {action()}
+        }
+        val glyph=label(symbol,19f,PulseSettings.accent).apply {
+            gravity=Gravity.CENTER; background=bg(0xff292638.toInt(),13)
+        }
+        item.addView(glyph,LinearLayout.LayoutParams(dp(42),dp(42)))
+        val texts=col().apply {setPadding(dp(12),0,0,0)}
+        texts.addView(label(title,14f,Color.WHITE).apply { typeface=Typeface.DEFAULT_BOLD })
+        texts.addView(label(detail,11f,0xff9b9fab.toInt()).apply {maxLines=2})
+        item.addView(texts,LinearLayout.LayoutParams(0,-2,1f))
+        item.addView(label("›",23f,0xff777c8e.toInt()))
+        return item
+    }
+    private fun entrance(view: View) {
+        if(!PulseSettings.animationsOn) return
+        view.alpha=0f;view.translationY=dp(14).toFloat();view.scaleX=0.975f;view.scaleY=0.975f
+        view.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+            .setDuration(330).setInterpolator(floatIn).start()
+    }
+    private fun toggleExpanded() {
+        if(expanded && PulseSettings.animationsOn && panel!=null) {
+            val old=panel!!
+            old.animate().alpha(0f).translationY(dp(-8).toFloat()).scaleX(0.98f).scaleY(0.98f)
+                .setDuration(145).setInterpolator(floatIn)
+                .withEndAction {expanded=false;refreshUi()}.start()
+        } else {expanded=!expanded;refreshUi()}
     }
     private fun row(): LinearLayout = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
     private fun col(): LinearLayout = LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
@@ -132,14 +178,18 @@ class PulseOverlayService : Service() {
             ?.minByOrNull { abs(it.centerX()-bounds.centerX()) }
     }
     /** Offset is relative to the full screen for overlay windows using layout-in-screen. */
-    private fun cameraY(): Int = ((cameraRect()?.centerY() ?: dp(23))-dp(22)+dp(PulseSettings.cameraYOffset))
+    // The 68dp tap area is centered on the camera; all visible text begins BELOW it.
+    private fun cameraY(): Int = ((cameraRect()?.centerY() ?: dp(23))-dp(34)+dp(PulseSettings.cameraYOffset))
         .coerceIn(-dp(12),resources.displayMetrics.heightPixels-dp(80))
     private fun positionWindow() {
         if (dragging) return
         params?.let { p ->
-            p.x=if(PulseSettings.cameraAnchor) 0 else dp(PulseSettings.posX)
-            p.y=if(PulseSettings.cameraAnchor) cameraY() else dp(PulseSettings.posY)
-            root?.let { runCatching { windows.updateViewLayout(it,p) } }
+            val x=if(PulseSettings.cameraAnchor) 0 else dp(PulseSettings.posX)
+            val y=if(PulseSettings.cameraAnchor) cameraY() else dp(PulseSettings.posY)
+            if (p.x != x || p.y != y) {
+                p.x=x;p.y=y
+                root?.let { runCatching { windows.updateViewLayout(it,p) } }
+            }
         }
     }
     private fun buildPill() {
@@ -147,7 +197,7 @@ class PulseOverlayService : Service() {
         val r=PillRoot(this).apply {orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_HORIZONTAL}
         root=r
         header=FrameLayout(this).apply { isClickable=true }
-        r.addView(header,LinearLayout.LayoutParams(dp(44),dp(44)))
+        r.addView(header,LinearLayout.LayoutParams(dp(68),dp(68)))
         attachGestures(header!!)
         val lp=WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,
@@ -169,26 +219,29 @@ class PulseOverlayService : Service() {
     private fun attachGestures(touch: View) {
         var downX=0f;var downY=0f;var startX=0;var startY=0
         var swiped=false
-        var longDragging=false
+        var doubleTap=false
         val detector=GestureDetector(this,object: GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean = true
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if(!dragging && !swiped) {expanded=!expanded; refreshUi()}
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                doubleTap=true
+                if(PulseSettings.aiOn) { expanded=false;refreshUi();showChat() }
                 return true
             }
-            override fun onDoubleTap(e: MotionEvent): Boolean {if(PulseSettings.aiOn) showChat();return true}
-            override fun onLongPress(e: MotionEvent) { longDragging=true;dragging=true }
+            override fun onLongPress(e: MotionEvent) {
+                // Vertical drags work without a long press; long press enables full X/Y motion.
+                dragging=true
+            }
         })
         touch.setOnTouchListener { _,e ->
+            if(e.actionMasked==MotionEvent.ACTION_DOWN) {
+                downX=e.rawX;downY=e.rawY;startX=params?.x?:0;startY=params?.y?:0
+                dragging=false;swiped=false;doubleTap=false
+            }
             detector.onTouchEvent(e)
             when(e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX=e.rawX;downY=e.rawY;startX=params?.x?:0;startY=params?.y?:0
-                    dragging=false;longDragging=false;swiped=false
-                }
                 MotionEvent.ACTION_MOVE -> {
                     val dx=e.rawX-downX;val dy=e.rawY-downY
-                    if(!dragging && !swiped && abs(dy)>dp(9) && abs(dy)>abs(dx)*1.15) dragging=true
+                    if(!dragging && !swiped && abs(dy)>dp(12) && abs(dy)>abs(dx)*1.15) dragging=true
                     if(!dragging && !swiped && abs(dx)>dp(42) && abs(dx)>abs(dy)*1.15) {
                         swiped=true;switchFocus(if(dx<0) 1 else -1)
                     }
@@ -199,16 +252,21 @@ class PulseOverlayService : Service() {
                             val contentW=if(expanded) dp(350) else dp(PulseSettings.pillWidth)
                             val maxX=((screenW-contentW)/2).coerceAtLeast(0)
                             p.x=(startX+dx.toInt()).coerceIn(-maxX,maxX)
-                            p.y=(startY+dy.toInt()).coerceIn(-dp(14),resources.displayMetrics.heightPixels-dp(80))
+                            p.y=(startY+dy.toInt()).coerceIn(-dp(20),resources.displayMetrics.heightPixels-dp(90))
                             root?.let {runCatching {windows.updateViewLayout(it,p)}}
                         }
                     }
                 }
-                MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
+                    val dx=abs(e.rawX-downX);val dy=abs(e.rawY-downY)
                     if(dragging) params?.let { PulseSettings.setPosition(
                         (it.x/resources.displayMetrics.density).toInt(),(it.y/resources.displayMetrics.density).toInt()) }
-                    if(longDragging) { /* A long press can be followed by drag in both axes. */ }
-                    if(dragging) handler.postDelayed({dragging=false},220)
+                    else if(!swiped && !doubleTap && dx<dp(14) && dy<dp(14)) {
+                        // Act on touch release, rather than waiting for single-tap confirmation.
+                        // This removes the perceptible ~300ms double-tap delay.
+                        toggleExpanded()
+                    }
+                    if(dragging) handler.postDelayed({dragging=false},140)
                 }
             }
             true
@@ -227,6 +285,7 @@ class PulseOverlayService : Service() {
         if (f1Active()) add("F1")
         if (PulseSettings.mediaOn && mediaActive) add("Media")
         if (PulseSettings.notificationsOn && transientNotice!=null) add("Notifications")
+        if (!anyActivity()) add("Home")
         if (PulseSettings.aiOn) add("AI")
         add("Settings")
     }
@@ -259,125 +318,161 @@ class PulseOverlayService : Service() {
     private fun refreshF1Values() {
         if(!expanded || focus()!="F1") return
         f1Line?.text="Driver #${PulseSettings.selectedDriver}  ·  ${F1Store.currentPosition()}  ·  Lap ${F1Store.currentLap()}"
-        f1EventLine?.text="Race control: ${F1Store.currentEvent().take(84)}"
+        f1EventLine?.text=F1Store.currentEvent().take(86)
         f1WeatherLine?.text=F1Store.currentWeather()
         f1Track?.setTrace(F1Store.track.toList(),F1Store.lapProgress())
     }
     fun refreshUi() {
-        val r=root ?:return
+        val r=root ?: return
         if(!PulseSettings.overlayOn || dragging) return
-        val active=anyActivity() || expanded
-        val focus=focus()
-        val shape="$active-$expanded-$focus-${PulseSettings.pillWidth}-${PulseSettings.accent}-${PulseSettings.cameraDotSize}"
+        val showing=anyActivity()
+        val active=showing || expanded
+        val target=focus()
+        val shape="$active-$expanded-$target-${PulseSettings.accent}-${PulseSettings.cameraDotSize}-${PulseSettings.pillWidth}"
         val render="$shape|${PulseSettings.selectedDriver}|${PulseSettings.animationsOn}|$mediaTitle|$transientNotice|${F1Store.status}|${F1Store.trackStatus}|${F1Store.track.size}|${F1Store.events.size}|${F1Store.playing}"
         if (render==lastRender) {refreshF1Values();positionWindow();return}
         lastRender=render
-        if(shape!=lastShape && PulseSettings.animationsOn) TransitionManager.beginDelayedTransition(r,AutoTransition().apply{duration=190})
+        if(shape!=lastShape && PulseSettings.animationsOn)
+            TransitionManager.beginDelayedTransition(r,AutoTransition().apply{duration=280;interpolator=floatIn})
         lastShape=shape
-        val h=header ?:return
+        val h=header ?: return
         h.removeAllViews()
-        if(!active) {
-            h.background=null
-            val diameter=cameraSize()
-            val dot=View(this).apply {background=bg(Color.BLACK,50)}
-            h.addView(dot,FrameLayout.LayoutParams(diameter,diameter,Gravity.CENTER))
-            h.layoutParams=LinearLayout.LayoutParams(dp(44),dp(44))
-        } else {
-            h.background=bg(0xff090a0e.toInt(),50,0xff343644.toInt())
-            h.elevation=dp(8).toFloat()
-            h.layoutParams=LinearLayout.LayoutParams(dp(PulseSettings.pillWidth),dp(44))
-            val content=row().apply {
-                setPadding(dp(10),0,dp(12),0)
-                gravity=Gravity.CENTER_VERTICAL
-            }
-            val lead=label(when {transientNotice!=null -> "●";focus=="F1" -> "◉";focus=="Media" -> "♫";focus=="AI" -> "✦";else -> "•"},13f,PulseSettings.accent)
-            content.addView(lead,LinearLayout.LayoutParams(dp(16),-1))
-            // Nothing is drawn across the central selfie-camera hole.
-            content.addView(Space(this),LinearLayout.LayoutParams((cameraSize()+dp(9)).coerceAtLeast(dp(26)),-1))
-            val title=label(when {
-                transientNotice!=null -> transientNotice!!.take(26)
-                focus=="F1" -> if(F1Store.mode=="LIVE") "F1 LIVE" else "F1 REPLAY"
-                focus=="Media" -> mediaTitle.take(20)
-                focus=="AI" -> "Pulse AI"
-                else -> "Pulse"
-            },12f,Color.WHITE).apply{typeface=Typeface.DEFAULT_BOLD;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}
-            headerTitle=title
-            content.addView(title,LinearLayout.LayoutParams(0,-1,1f))
-            h.addView(content,FrameLayout.LayoutParams(-1,-1))
-        }
+        h.background=null
+        h.elevation=0f
+        h.layoutParams=LinearLayout.LayoutParams(dp(68),dp(68))
+        h.contentDescription=if(expanded) "Close Pulse" else "Open Pulse. Double tap for AI."
+        // Only the true camera-sized dot is visible in this 68x68dp hit target.
+        // Camera cutout is not overlaid by text, badges or controls.
+        val dot=View(this).apply {background=bg(Color.BLACK,50);isClickable=false}
+        h.addView(dot,FrameLayout.LayoutParams(cameraSize(),cameraSize(),Gravity.CENTER))
         r.removeViews(1,(r.childCount-1).coerceAtLeast(0))
-        f1Line=null; f1EventLine=null; f1WeatherLine=null; f1Track=null
+        preview=null;panel=null;f1Line=null;f1EventLine=null;f1WeatherLine=null;f1Track=null
+
+        // A separate capsule BELOW the camera, so no letters can be hidden by it.
+        if(showing && !expanded) {
+            val subtitle=when {
+                transientNotice!=null -> transientNotice!!.take(35)
+                target=="F1" -> if(F1Store.mode=="LIVE") "●  F1  ·  Live session" else "◉  F1  ·  Replay"
+                target=="Media" -> "♫  ${mediaTitle.take(30)}"
+                else -> "Pulse"
+            }
+            val v=label(subtitle,12f,Color.WHITE).apply {
+                gravity=Gravity.CENTER
+                typeface=Typeface.DEFAULT_BOLD
+                maxLines=1
+                ellipsize=android.text.TextUtils.TruncateAt.END
+                background=ripple(0xff0c0e14.toInt(),22)
+                setPadding(dp(18),dp(10),dp(18),dp(10))
+                minimumHeight=dp(38)
+                contentDescription="$subtitle. Tap to expand Pulse."
+                setOnClickListener {toggleExpanded()}
+            }
+            preview=v
+            val width=dp(PulseSettings.pillWidth).coerceAtMost(resources.displayMetrics.widthPixels-dp(28))
+            r.addView(v,LinearLayout.LayoutParams(width,dp(42)).apply {topMargin=dp(2)})
+            entrance(v)
+        }
         if(expanded) {
             val p=col().apply {
-                background=bg(0xff12141b.toInt(),22,0xff303441.toInt())
-                setPadding(dp(15),dp(13),dp(15),dp(15))
-                elevation=dp(10).toFloat()
+                background=bg(0xff101218.toInt(),26,0xff292d39.toInt())
+                setPadding(dp(17),dp(17),dp(17),dp(17))
+                elevation=dp(12).toFloat()
+                clipToPadding=false
             }
+            val eyebrow=label("P U L S E    /    ${target.uppercase()}",10f,PulseSettings.accent).apply {
+                letterSpacing=0.1f;typeface=Typeface.DEFAULT_BOLD
+            }
+            p.addView(eyebrow)
+            p.addView(spacer(4))
             val top=row()
-            top.addView(label(focus.uppercase(),14f,PulseSettings.accent).apply{typeface=Typeface.DEFAULT_BOLD},LinearLayout.LayoutParams(0,dp(32),1f))
-            top.addView(button("×") {expanded=false;refreshUi()})
+            top.addView(label(when(target) {
+                "F1" -> "Race center"
+                "Media" -> "Now playing"
+                "AI" -> "Pulse intelligence"
+                else -> "Your island"
+            },21f,Color.WHITE).apply {typeface=Typeface.DEFAULT_BOLD},LinearLayout.LayoutParams(0,dp(44),1f))
+            val dismiss=label("×",22f,0xffc7c8d3.toInt()).apply {
+                background=ripple(0xff22252f.toInt(),16)
+                gravity=Gravity.CENTER
+                contentDescription="Close expanded Pulse"
+                setOnClickListener {toggleExpanded()}
+            }
+            top.addView(dismiss,LinearLayout.LayoutParams(dp(44),dp(44)))
             p.addView(top)
-            p.addView(spacer(8))
-            when(focus) {
+            p.addView(spacer(12))
+            when(target) {
                 "F1" -> {
-                    p.addView(label(F1Store.selectedSession?.label ?: "No session",13f))
-                    p.addView(spacer(8))
-                    f1Line=label("Driver #${PulseSettings.selectedDriver}  ·  ${F1Store.currentPosition()}  ·  Lap ${F1Store.currentLap()}",13f)
+                    p.addView(label(F1Store.selectedSession?.label ?: "No session selected",12f,0xffacaebb.toInt()))
+                    p.addView(spacer(12))
+                    f1Line=label("Driver #${PulseSettings.selectedDriver}   ·   ${F1Store.currentPosition()}   ·   Lap ${F1Store.currentLap()}",14f).apply {typeface=Typeface.DEFAULT_BOLD}
                     p.addView(f1Line)
                     p.addView(spacer(8))
                     if(F1Store.track.isNotEmpty()) {
                         f1Track=TrackMapView(this).apply {setTrace(F1Store.track.toList(),F1Store.lapProgress())}
-                        p.addView(f1Track,LinearLayout.LayoutParams(-1,dp(150)))
-                        p.addView(label("Approximate lap progress · not precise GPS",10f,0xffa7a7b3.toInt()))
-                    } else p.addView(label(F1Store.trackStatus.take(110),11f,0xffb3afc2.toInt()))
-                    p.addView(spacer(8))
-                    f1EventLine=label("Race control: ${F1Store.currentEvent().take(84)}",11f,0xffa6a8b5.toInt())
+                        p.addView(f1Track,LinearLayout.LayoutParams(-1,dp(145)))
+                        p.addView(label("Approximate track progress",10f,0xff9093a3.toInt()))
+                    } else p.addView(label(F1Store.trackStatus.take(115),11f,0xffaeb0bd.toInt()))
+                    p.addView(spacer(13))
+                    f1EventLine=label("${F1Store.currentEvent().take(86)}",12f,0xffd1d2dc.toInt())
                     p.addView(f1EventLine)
-                    f1WeatherLine=label(F1Store.currentWeather(),11f,0xffa6a8b5.toInt())
+                    f1WeatherLine=label(F1Store.currentWeather(),11f,0xff8f95a6.toInt())
                     p.addView(f1WeatherLine)
-                    p.addView(spacer(10))
+                    p.addView(spacer(13))
                     val controls=row()
-                    controls.addView(button("−15s") {F1Store.seekSeconds(-15)})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button(if(F1Store.playing) "Pause" else "Play") {F1Store.togglePlay()})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button("+15s") {F1Store.seekSeconds(15)})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button("Latest") {F1Store.goLatest()})
+                    controls.addView(button("−15s") {F1Store.seekSeconds(-15)},LinearLayout.LayoutParams(0,dp(44),1f))
+                    controls.addView(Space(this),LinearLayout.LayoutParams(dp(8),1))
+                    controls.addView(button(if(F1Store.playing) "Pause" else "Play") {F1Store.togglePlay()},LinearLayout.LayoutParams(0,dp(44),1f))
+                    controls.addView(Space(this),LinearLayout.LayoutParams(dp(8),1))
+                    controls.addView(button("+15s") {F1Store.seekSeconds(15)},LinearLayout.LayoutParams(0,dp(44),1f))
                     p.addView(controls)
-                    p.addView(spacer(9))
-                    p.addView(button("Stop F1 replay / timeline") {F1Store.stopPlayback(); expanded=false;refreshUi()})
+                    p.addView(spacer(10))
+                    p.addView(actionTile("■", "Stop replay", "Clear the F1 timeline",{
+                        F1Store.stopPlayback();expanded=false;refreshUi()
+                    }))
                 }
                 "Media" -> {
-                    p.addView(label(mediaTitle,15f));p.addView(spacer(10))
+                    p.addView(label(mediaTitle,15f,Color.WHITE).apply {typeface=Typeface.DEFAULT_BOLD})
+                    p.addView(spacer(15))
                     val controls=row()
-                    controls.addView(button("◀◀") {mediaController?.transportControls?.skipToPrevious()})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button("Play") {mediaController?.transportControls?.play()})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button("Pause") {mediaController?.transportControls?.pause()})
-                    controls.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-                    controls.addView(button("▶▶") {mediaController?.transportControls?.skipToNext()})
+                    controls.addView(button("◀◀") {mediaController?.transportControls?.skipToPrevious()},LinearLayout.LayoutParams(0,dp(46),1f))
+                    controls.addView(Space(this),LinearLayout.LayoutParams(dp(8),1))
+                    controls.addView(button("▶ / ❚❚") {
+                        val state=mediaController?.playbackState?.state
+                        if(state==PlaybackState.STATE_PLAYING) mediaController?.transportControls?.pause()
+                        else mediaController?.transportControls?.play()
+                    },LinearLayout.LayoutParams(0,dp(46),2f))
+                    controls.addView(Space(this),LinearLayout.LayoutParams(dp(8),1))
+                    controls.addView(button("▶▶") {mediaController?.transportControls?.skipToNext()},LinearLayout.LayoutParams(0,dp(46),1f))
                     p.addView(controls)
                 }
-                "AI" -> p.addView(button("Open floating AI chat") {showChat();expanded=false;refreshUi()})
-                "Notifications" -> p.addView(label(transientNotice ?: "No new notifications",13f))
-                else -> p.addView(label("No active sessions. Configure Pulse or choose a replay.",12f))
+                "AI" -> p.addView(actionTile("✦", "Ask Pulse", "Open your floating conversation",{
+                    expanded=false;refreshUi();showChat()
+                }))
+                "Notifications" -> p.addView(label(transientNotice ?: "No recent notifications",14f))
+                else -> {
+                    p.addView(label("No active media or F1 replay.",13f,0xffa9adbb.toInt()))
+                    p.addView(spacer(12))
+                }
             }
+            p.addView(spacer(14))
+            p.addView(View(this).apply {setBackgroundColor(0xff2a2d36.toInt())},LinearLayout.LayoutParams(-1,dp(1)))
             p.addView(spacer(12))
-            val footer=row()
-            footer.addView(button("AI") {if(PulseSettings.aiOn){showChat();expanded=false;refreshUi()}})
-            footer.addView(Space(this),LinearLayout.LayoutParams(0,dp(1),1f))
-            footer.addView(button("Control Center") {
+            if(PulseSettings.aiOn && target!="AI") {
+                p.addView(actionTile("✦", "Ask Pulse", "Quick AI conversation",{
+                    expanded=false;refreshUi();showChat()
+                }))
+                p.addView(spacer(8))
+            }
+            p.addView(actionTile("⚙", "Control Center", "Appearance, sessions and settings",{
                 expanded=false;refreshUi()
                 startActivity(Intent(this,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            })
-            p.addView(footer)
+            }))
             panel=p
-            val screenW=resources.displayMetrics.widthPixels
-            val width=(screenW-dp(20)).coerceAtMost(dp(350))
+            val width=(resources.displayMetrics.widthPixels-dp(24)).coerceAtMost(dp(350))
+            // 68dp camera hit area ends BEFORE this panel begins.
             r.addView(p,LinearLayout.LayoutParams(width,-2).apply {topMargin=dp(8)})
-        } else panel=null
+            entrance(p)
+        }
         positionWindow()
     }
     private fun showChat() {

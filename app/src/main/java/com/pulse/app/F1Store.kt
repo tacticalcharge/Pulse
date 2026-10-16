@@ -182,8 +182,9 @@ object F1Store {
     }
 
     fun listYear(year: Int) {
+        if (selectedYear == year && sessions.isNotEmpty()) return
         selectedYear = year
-        status = "Loading $year sessions…"
+        status = "Loading $year sessions… (cached on this device when available)"
         io.execute {
             val result = runCatching { parseSessions(HttpUtil.getArray("https://api.openf1.org/v1/sessions?year=$year")) }
             main.post {
@@ -254,7 +255,7 @@ object F1Store {
     fun checkAutomaticLive() {
         if (!PulseSettings.f1On || !PulseSettings.autoF1) return
         val now = Instant.now()
-        if (Duration.between(lastLivePoll,now).seconds < 75) return
+        if (Duration.between(lastLivePoll,now).seconds < 240) return
         lastLivePoll = now
         io.execute {
             val result = runCatching {
@@ -296,7 +297,7 @@ object F1Store {
         if(mode=="LIVE") pollLive(active)
     }
     private fun loadLiveMapIfNeeded(session: F1Session) {
-        if(track.isNotEmpty() || Duration.between(lastMapAttempt,Instant.now()).seconds < 180) return
+        if(track.isNotEmpty() || Duration.between(lastMapAttempt,Instant.now()).seconds < 600) return
         lastMapAttempt=Instant.now()
         val key=session.key
         io.execute {
@@ -311,7 +312,7 @@ object F1Store {
     }
     private fun pollLive(session: F1Session) {
         if (!PulseSettings.f1On || mode != "LIVE" || selectedSession?.key != session.key || fetchingLive) return
-        if(Duration.between(lastLiveFetchAttempt,Instant.now()).seconds < 15) return
+        if(Duration.between(lastLiveFetchAttempt,Instant.now()).seconds < 45) return
         lastLiveFetchAttempt=Instant.now();fetchingLive=true
         val since = if (lastLiveEventAt == Instant.EPOCH) Instant.now().minusSeconds(600) else lastLiveEventAt.minusSeconds(2)
         io.execute {

@@ -31,6 +31,7 @@ object PulseSettings {
 
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences("pulse", Context.MODE_PRIVATE)
+        HttpUtil.init(context)
         overlayOn = prefs.getBoolean("overlayOn", false)
         f1On = prefs.getBoolean("f1On", true)
         autoF1 = prefs.getBoolean("autoF1", true)

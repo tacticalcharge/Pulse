@@ -225,6 +225,7 @@ private fun RacingTab(update:()->Unit) {
             }
         }
         Note(F1Store.status)
+        Note("Replays are cached locally after loading. OpenF1 requests are spaced out; if the provider limits access, wait for the indicated cooldown before retrying.")
         val list=F1Store.sessions.filter { s ->
             (search.isBlank() || listOf(s.country,s.circuit,s.name).any { it.contains(search,true) }) &&
                 (filter=="All" || (filter=="Race" && (s.name=="Race" || s.name=="Sprint")) ||
@@ -356,7 +357,7 @@ private fun DesignTab(update:()->Unit) {
         DarkButton("Reset to selfie camera",{PulseSettings.resetCameraPosition();update()},Modifier.fillMaxWidth())
     }
     Group("Gestures") {
-        Note("Tap: expand or collapse · Double-tap: AI · Swipe sideways: switch focus · Drag vertically: reposition · Tap outside expanded pill: dismiss.")
+        Note("Tap the larger invisible area around the camera for instant expansion. Active titles slide into a separate capsule below the camera. Double-tap: AI · Swipe: focus · Drag vertically: reposition · Tap outside: dismiss.")
     }
 }
 @Composable
